@@ -52,3 +52,8 @@ These are the main technical references shaping the architecture:
 - DeepPhase: Periodic Autoencoders for Learning Motion Phase Manifolds, SIGGRAPH 2022.
 
 For this repo, the practical conclusion is to start with a deterministic gameplay controller and layer animation sophistication afterward. That keeps interactions like shooting, opening doors, and golf swings debuggable while still leaving the door open to motion matching or learned controllers once the move library becomes large enough.
+
+See also:
+
+- [ROADMAP.md](./ROADMAP.md) for milestone planning
+- [RESEARCH.md](./RESEARCH.md) for the animation research shortlist
