@@ -77,6 +77,16 @@ function dampAxis(
   );
 }
 
+function dampAngle(current: number, target: number, lambda: number, delta: number) {
+  const difference = Math.atan2(
+    Math.sin(target - current),
+    Math.cos(target - current),
+  );
+  const alpha = 1 - Math.exp(-lambda * delta);
+
+  return current + difference * alpha;
+}
+
 export function MwendoPlayer({
   position = [0, 2.5, 6],
   controls = "keyboard",
@@ -267,25 +277,29 @@ export function MwendoPlayer({
     );
 
     const bodyPosition = body.translation();
-    const facing = hasMovementInput
-      ? Math.atan2(movement.x, movement.z)
-      : playerFacing;
     const groundedAfterMove = groundedRef.current;
     const nextMovementMode: MwendoMovementMode = groundedAfterMove
       ? locomotionMode
       : nextVelocityY > 0.35
         ? "jump"
         : "fall";
-    const speedRatio = Math.min(
-      1,
-      Math.hypot(nextVelocityX, nextVelocityZ) / runSpeed,
-    );
+    const horizontalSpeed = Math.hypot(nextVelocityX, nextVelocityZ);
+    const speedRatio = Math.min(1, horizontalSpeed / runSpeed);
     const crouchAmount = locomotionMode === "crouch" ? 1 : 0;
     const airborneAmount = groundedAfterMove ? 0 : 1;
     const airArmLift = airborneAmount * 0.18;
     const airLegTuck = airborneAmount * 0.34;
-
-    visual.rotation.y = MathUtils.damp(visual.rotation.y, facing, 10, delta);
+    const hasHorizontalMotion = horizontalSpeed > 0.08;
+    const targetFacing = hasHorizontalMotion
+      ? Math.atan2(nextVelocityX, nextVelocityZ)
+      : playerFacing;
+    visual.rotation.y = dampAngle(
+      visual.rotation.y,
+      targetFacing,
+      groundedAfterMove ? 11 : 7,
+      delta,
+    );
+    const facing = visual.rotation.y;
 
     gaitPhaseRef.current += delta * MathUtils.lerp(1.2, 8.8, speedRatio);
     const stride = Math.sin(gaitPhaseRef.current);
@@ -310,7 +324,7 @@ export function MwendoPlayer({
     );
     pelvis.rotation.y = MathUtils.damp(
       pelvis.rotation.y,
-      torsoTwist * 0.35,
+      torsoTwist * 0.24,
       10,
       delta,
     );

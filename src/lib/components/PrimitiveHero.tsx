@@ -66,7 +66,8 @@ export function PrimitiveHero(props: {
   return (
     <group
       ref={props.rig.rootRef}
-      position={[0, 0.02, 0]}
+      position={[0, -0.12, 0]}
+      scale={0.43}
       userData={{ mwendoIgnoreCameraOcclusion: true }}
     >
       <group ref={props.rig.pelvisRef} position={[0, 0.9, 0]}>
