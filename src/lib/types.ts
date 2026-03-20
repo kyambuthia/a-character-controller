@@ -20,6 +20,14 @@ export type CharacterCtrlrBalanceState =
   | "recovering"
   | "unsupported";
 
+export type CharacterCtrlrRecoveryState =
+  | "stable"
+  | "stumbling"
+  | "fallen"
+  | "recovering"
+  | "jumping"
+  | "landing";
+
 export type CharacterCtrlrGaitTransitionReason =
   | "initial"
   | "movement-start"
@@ -59,6 +67,7 @@ export type CharacterCtrlrLocomotionDebugState = {
   gaitPhase: CharacterCtrlrGaitPhase;
   gaitTransitionReason: CharacterCtrlrGaitTransitionReason;
   balanceState: CharacterCtrlrBalanceState;
+  recoveryState: CharacterCtrlrRecoveryState;
   supportState: CharacterCtrlrSupportState;
   plannedSupportSide: "left" | "right" | null;
   swingSide: "left" | "right" | null;
@@ -88,6 +97,9 @@ export type CharacterCtrlrLocomotionDebugState = {
   stepLengthTarget: number;
   stepWidthTarget: number;
   stepHeightTarget: number;
+  footfallForwardError: number;
+  footfallLateralError: number;
+  recentTransitions: string[];
 };
 
 export const DEFAULT_CHARACTER_CTRLR_INPUT: CharacterCtrlrInputState = {

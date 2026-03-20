@@ -23,6 +23,7 @@ export type {
   CharacterCtrlrLocomotionDebugState,
   CharacterCtrlrMovementMode,
   CharacterCtrlrPlayerSnapshot,
+  CharacterCtrlrRecoveryState,
   CharacterCtrlrSupportState,
   CharacterCtrlrVec3,
 } from "./types";

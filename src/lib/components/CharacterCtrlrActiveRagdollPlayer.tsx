@@ -23,6 +23,7 @@ import {
   type CharacterCtrlrLocomotionDebugState,
   type CharacterCtrlrMovementMode,
   type CharacterCtrlrPlayerSnapshot,
+  type CharacterCtrlrRecoveryState,
   type CharacterCtrlrSupportState,
   type CharacterCtrlrVec3,
 } from "../types";
@@ -702,6 +703,11 @@ type GaitState = {
   lastStanceSide: SupportSide;
 };
 
+type RecoveryState = {
+  mode: CharacterCtrlrRecoveryState;
+  elapsed: number;
+};
+
 function transitionGaitState(
   gaitState: GaitState,
   nextPhase: CharacterCtrlrGaitPhase,
@@ -722,6 +728,108 @@ function transitionGaitState(
   } else if (nextPhase === "right-stance") {
     gaitState.lastStanceSide = "right";
   }
+}
+
+function transitionRecoveryState(
+  recoveryState: RecoveryState,
+  nextMode: CharacterCtrlrRecoveryState,
+) {
+  if (recoveryState.mode !== nextMode) {
+    recoveryState.mode = nextMode;
+    recoveryState.elapsed = 0;
+    return;
+  }
+
+  recoveryState.elapsed = Math.max(0, recoveryState.elapsed);
+}
+
+function applyRecoveryPoseTargets(
+  targets: PhasePoseTargets,
+  recoveryState: CharacterCtrlrRecoveryState,
+  recoveryProgress: number,
+) {
+  if (recoveryState === "stable" || recoveryState === "jumping") {
+    return targets;
+  }
+
+  const adjustedTargets: PhasePoseTargets = {
+    pelvisPitch: targets.pelvisPitch,
+    pelvisRoll: targets.pelvisRoll,
+    chestPitch: targets.chestPitch,
+    chestRoll: targets.chestRoll,
+    left: { ...targets.left },
+    right: { ...targets.right },
+  };
+
+  switch (recoveryState) {
+    case "stumbling": {
+      const stumbleAmount = MathUtils.lerp(0.08, 0.18, recoveryProgress);
+      adjustedTargets.pelvisPitch -= stumbleAmount;
+      adjustedTargets.chestPitch += stumbleAmount * 0.6;
+      adjustedTargets.left.knee -= stumbleAmount * 0.9;
+      adjustedTargets.right.knee -= stumbleAmount * 0.9;
+      adjustedTargets.left.ankle += stumbleAmount * 0.35;
+      adjustedTargets.right.ankle += stumbleAmount * 0.35;
+      adjustedTargets.left.shoulder += stumbleAmount * 0.8;
+      adjustedTargets.right.shoulder += stumbleAmount * 0.8;
+      adjustedTargets.left.elbow -= stumbleAmount * 0.7;
+      adjustedTargets.right.elbow -= stumbleAmount * 0.7;
+      break;
+    }
+    case "landing": {
+      const landingCompression = MathUtils.lerp(0.2, 0.05, recoveryProgress);
+      adjustedTargets.pelvisPitch -= landingCompression * 0.7;
+      adjustedTargets.chestPitch += landingCompression * 0.45;
+      adjustedTargets.left.hip -= landingCompression * 0.45;
+      adjustedTargets.right.hip -= landingCompression * 0.45;
+      adjustedTargets.left.knee -= landingCompression;
+      adjustedTargets.right.knee -= landingCompression;
+      adjustedTargets.left.ankle += landingCompression * 0.5;
+      adjustedTargets.right.ankle += landingCompression * 0.5;
+      break;
+    }
+    case "fallen": {
+      adjustedTargets.pelvisPitch = -0.24;
+      adjustedTargets.pelvisRoll = 0;
+      adjustedTargets.chestPitch = 0.28;
+      adjustedTargets.chestRoll = 0;
+      adjustedTargets.left.hip = -0.34;
+      adjustedTargets.right.hip = -0.34;
+      adjustedTargets.left.knee = -1.02;
+      adjustedTargets.right.knee = -1.02;
+      adjustedTargets.left.ankle = -0.18;
+      adjustedTargets.right.ankle = -0.18;
+      adjustedTargets.left.shoulder = 0.26;
+      adjustedTargets.right.shoulder = 0.26;
+      adjustedTargets.left.elbow = -0.72;
+      adjustedTargets.right.elbow = -0.72;
+      adjustedTargets.left.wrist = -0.12;
+      adjustedTargets.right.wrist = -0.12;
+      break;
+    }
+    case "recovering": {
+      const standBlend = MathUtils.clamp(recoveryProgress, 0, 1);
+      adjustedTargets.pelvisPitch = MathUtils.lerp(-0.2, -0.08, standBlend);
+      adjustedTargets.pelvisRoll *= 0.4;
+      adjustedTargets.chestPitch = MathUtils.lerp(0.26, 0.12, standBlend);
+      adjustedTargets.chestRoll *= 0.4;
+      adjustedTargets.left.hip = MathUtils.lerp(-0.28, adjustedTargets.left.hip, standBlend);
+      adjustedTargets.right.hip = MathUtils.lerp(-0.28, adjustedTargets.right.hip, standBlend);
+      adjustedTargets.left.knee = MathUtils.lerp(-0.9, adjustedTargets.left.knee, standBlend);
+      adjustedTargets.right.knee = MathUtils.lerp(-0.9, adjustedTargets.right.knee, standBlend);
+      adjustedTargets.left.ankle = MathUtils.lerp(0.12, adjustedTargets.left.ankle, standBlend);
+      adjustedTargets.right.ankle = MathUtils.lerp(0.12, adjustedTargets.right.ankle, standBlend);
+      adjustedTargets.left.shoulder = MathUtils.lerp(0.18, adjustedTargets.left.shoulder, standBlend);
+      adjustedTargets.right.shoulder = MathUtils.lerp(0.18, adjustedTargets.right.shoulder, standBlend);
+      adjustedTargets.left.elbow = MathUtils.lerp(-0.46, adjustedTargets.left.elbow, standBlend);
+      adjustedTargets.right.elbow = MathUtils.lerp(-0.46, adjustedTargets.right.elbow, standBlend);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return adjustedTargets;
 }
 
 export function CharacterCtrlrActiveRagdollPlayer({
@@ -770,7 +878,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
     transitionCount: 0,
     lastStanceSide: "right",
   });
+  const recoveryStateRef = useRef<RecoveryState>({
+    mode: "stable",
+    elapsed: 0,
+  });
   const lastSnapshotRef = useRef<CharacterCtrlrPlayerSnapshot | null>(null);
+  const lastTransitionCountRef = useRef(0);
+  const transitionHistoryRef = useRef<string[]>([]);
   const focusPositionRef = useRef<CharacterCtrlrVec3 | null>(null);
   const locomotionDebugRef = useRef<CharacterCtrlrLocomotionDebugState | null>(null);
   const initialPositionRef = useRef(position);
@@ -1077,6 +1191,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
     const gaitPhaseValue = gaitState.phaseDuration > 0
       ? Math.min(1, gaitState.phaseElapsed / gaitState.phaseDuration)
       : 0;
+    if (gaitState.transitionCount !== lastTransitionCountRef.current) {
+      lastTransitionCountRef.current = gaitState.transitionCount;
+      transitionHistoryRef.current = [
+        `${gaitState.phase}:${gaitState.transitionReason}`,
+        ...transitionHistoryRef.current,
+      ].slice(0, 4);
+    }
     const rootPosition = pelvis.translation();
     const chestPosition = chest.translation();
     const predictedVelocityY = jumpTriggered
@@ -1094,44 +1215,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
       groundedAfterControl ? 10 : 4,
       delta,
     );
-    const phasePoseTargets = derivePhasePoseTargets({
+    let phasePoseTargets = derivePhasePoseTargets({
       gaitPhase: gaitState.phase,
       gaitPhaseValue,
       gaitEffort,
       gaitConfig,
       grounded: groundedAfterControl,
     });
-
-    pelvis.applyTorqueImpulse(
-      {
-        x: MathUtils.clamp(
-          (
-            (phasePoseTargets.pelvisPitch - pelvisEuler.x) * uprightTorque
-            - pelvisAngularVelocity.x * balanceDamping
-          ) * pelvisTorqueScale * delta,
-          -0.45,
-          0.45,
-        ),
-        y: MathUtils.clamp(
-          (
-            yawError * turnTorque
-            - pelvisAngularVelocity.y * (balanceDamping * 0.65)
-          ) * pelvisTorqueScale * delta,
-          -0.28,
-          0.28,
-        ),
-        z: MathUtils.clamp(
-          (
-            (phasePoseTargets.pelvisRoll - pelvisEuler.z) * uprightTorque
-            - pelvisAngularVelocity.z * balanceDamping
-          ) * pelvisTorqueScale * delta,
-          -0.45,
-          0.45,
-        ),
-      },
-      true,
-    );
-
     const chestRotation = chest.rotation();
     const chestAngularVelocity = chest.angvel();
 
@@ -1142,36 +1232,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       chestRotation.w,
     );
     chestEuler.setFromQuaternion(chestQuaternion, "YXZ");
-
-    chest.applyTorqueImpulse(
-      {
-        x: MathUtils.clamp(
-          (
-            (phasePoseTargets.chestPitch - chestEuler.x) * uprightTorque * 0.84
-            - chestAngularVelocity.x * balanceDamping
-          ) * pelvisTorqueScale * delta,
-          -0.32,
-          0.32,
-        ),
-        y: MathUtils.clamp(
-          (
-            yawError * turnTorque * 0.35
-            - chestAngularVelocity.y * (balanceDamping * 0.5)
-          ) * pelvisTorqueScale * delta,
-          -0.16,
-          0.16,
-        ),
-        z: MathUtils.clamp(
-          (
-            (phasePoseTargets.chestRoll - chestEuler.z) * uprightTorque * 0.84
-            - chestAngularVelocity.z * balanceDamping
-          ) * pelvisTorqueScale * delta,
-          -0.32,
-          0.32,
-        ),
-      },
-      true,
-    );
+    const previousSnapshot = lastSnapshotRef.current;
 
     const plannedSupportSide: SupportSide | null =
       gaitState.phase === "left-stance"
@@ -1200,6 +1261,8 @@ export function CharacterCtrlrActiveRagdollPlayer({
     let captureForwardError = 0;
     let captureTime = 0;
     let captureUrgency = 0;
+    let footfallForwardError = 0;
+    let footfallLateralError = 0;
     const stepLengthTarget =
       groundedAfterControl && hasMovementInput
         ? MathUtils.lerp(gaitConfig.step.length[0], gaitConfig.step.length[1], gaitEffort)
@@ -1417,8 +1480,190 @@ export function CharacterCtrlrActiveRagdollPlayer({
       }
     }
 
+    const recoveryState = recoveryStateRef.current;
+    recoveryState.elapsed += delta;
+    const pelvisTilt = Math.max(
+      Math.abs(pelvisEuler.x),
+      Math.abs(pelvisEuler.z),
+    );
+    const chestTilt = Math.max(
+      Math.abs(chestEuler.x),
+      Math.abs(chestEuler.z),
+    );
+    const supportHeight = rootPosition.y - supportCenter.y;
+    const severeInstability =
+      groundedAfterControl
+      && (
+        pelvisTilt > 1.05
+        || chestTilt > 1.18
+        || supportHeight < 0.64
+      );
+    const moderateInstability =
+      groundedAfterControl
+      && !severeInstability
+      && (
+        captureUrgency > 0.58
+        || pelvisTilt > 0.44
+        || chestTilt > 0.58
+        || Math.abs(supportLateralError) > 0.18
+        || Math.abs(supportForwardError) > 0.24
+      );
+    const recoveryReady =
+      groundedAfterControl
+      && supportStateAfterJump !== "none"
+      && supportHeight > 0.84
+      && pelvisTilt < 0.34
+      && chestTilt < 0.42
+      && Math.abs(supportLateralError) < 0.18
+      && Math.abs(supportForwardError) < 0.24
+      && Math.abs(captureForwardError) < 0.24
+      && Math.abs(captureLateralError) < 0.18;
+
+    if (jumpTriggered || (!groundedAfterControl && predictedVelocityY > 0.35)) {
+      transitionRecoveryState(recoveryState, "jumping");
+    } else if (previousSnapshot && !previousSnapshot.grounded && groundedAfterControl) {
+      transitionRecoveryState(recoveryState, "landing");
+    } else if (recoveryState.mode === "jumping" && !groundedAfterControl) {
+      transitionRecoveryState(recoveryState, "jumping");
+    } else if (severeInstability) {
+      transitionRecoveryState(recoveryState, "fallen");
+    } else if (recoveryState.mode === "fallen") {
+      transitionRecoveryState(
+        recoveryState,
+        recoveryReady ? "recovering" : "fallen",
+      );
+    } else if (recoveryState.mode === "recovering") {
+      if (recoveryReady && recoveryState.elapsed > 0.42) {
+        transitionRecoveryState(recoveryState, "stable");
+      } else {
+        transitionRecoveryState(recoveryState, "recovering");
+      }
+    } else if (recoveryState.mode === "landing") {
+      transitionRecoveryState(
+        recoveryState,
+        recoveryState.elapsed < 0.2 ? "landing" : moderateInstability ? "stumbling" : "stable",
+      );
+    } else if (moderateInstability) {
+      transitionRecoveryState(recoveryState, "stumbling");
+    } else {
+      transitionRecoveryState(recoveryState, "stable");
+    }
+
+    const recoveryProgress = MathUtils.clamp(
+      recoveryState.mode === "recovering"
+        ? recoveryState.elapsed / 0.85
+        : recoveryState.mode === "landing"
+          ? recoveryState.elapsed / 0.2
+          : recoveryState.mode === "stumbling"
+            ? recoveryState.elapsed / 0.3
+            : 1,
+      0,
+      1,
+    );
+    phasePoseTargets = applyRecoveryPoseTargets(
+      phasePoseTargets,
+      recoveryState.mode,
+      recoveryProgress,
+    );
+
+    const recoveryTorqueBoost =
+      recoveryState.mode === "fallen"
+        ? 1.35
+        : recoveryState.mode === "recovering"
+          ? 1.2
+          : recoveryState.mode === "landing"
+            ? 1.08
+            : 1;
+
+    pelvis.applyTorqueImpulse(
+      {
+        x: MathUtils.clamp(
+          (
+            (phasePoseTargets.pelvisPitch - pelvisEuler.x) * uprightTorque
+            - pelvisAngularVelocity.x * balanceDamping
+          ) * pelvisTorqueScale * recoveryTorqueBoost * delta,
+          -0.55,
+          0.55,
+        ),
+        y: MathUtils.clamp(
+          (
+            yawError * turnTorque
+            - pelvisAngularVelocity.y * (balanceDamping * 0.65)
+          ) * pelvisTorqueScale * delta,
+          -0.28,
+          0.28,
+        ),
+        z: MathUtils.clamp(
+          (
+            (phasePoseTargets.pelvisRoll - pelvisEuler.z) * uprightTorque
+            - pelvisAngularVelocity.z * balanceDamping
+          ) * pelvisTorqueScale * recoveryTorqueBoost * delta,
+          -0.55,
+          0.55,
+        ),
+      },
+      true,
+    );
+
+    chest.applyTorqueImpulse(
+      {
+        x: MathUtils.clamp(
+          (
+            (phasePoseTargets.chestPitch - chestEuler.x) * uprightTorque * 0.84
+            - chestAngularVelocity.x * balanceDamping
+          ) * pelvisTorqueScale * recoveryTorqueBoost * delta,
+          -0.38,
+          0.38,
+        ),
+        y: MathUtils.clamp(
+          (
+            yawError * turnTorque * 0.35
+            - chestAngularVelocity.y * (balanceDamping * 0.5)
+          ) * pelvisTorqueScale * delta,
+          -0.16,
+          0.16,
+        ),
+        z: MathUtils.clamp(
+          (
+            (phasePoseTargets.chestRoll - chestEuler.z) * uprightTorque * 0.84
+            - chestAngularVelocity.z * balanceDamping
+          ) * pelvisTorqueScale * recoveryTorqueBoost * delta,
+          -0.38,
+          0.38,
+        ),
+      },
+      true,
+    );
+
     if (
       groundedAfterControl
+      && (recoveryState.mode === "fallen" || recoveryState.mode === "recovering")
+    ) {
+      const recoveryDamping = recoveryState.mode === "fallen" ? 2.2 : 1.4;
+      pelvis.applyImpulse(
+        {
+          x: -currentVelocity.x * pelvisMass * recoveryDamping * delta,
+          y: 0,
+          z: -currentVelocity.z * pelvisMass * recoveryDamping * delta,
+        },
+        true,
+      );
+      chest.applyImpulse(
+        {
+          x: -currentVelocity.x * pelvisMass * recoveryDamping * 0.22 * delta,
+          y: 0,
+          z: -currentVelocity.z * pelvisMass * recoveryDamping * 0.22 * delta,
+        },
+        true,
+      );
+    }
+
+    const allowGaitStepping =
+      recoveryState.mode === "stable" || recoveryState.mode === "stumbling";
+
+    if (
+      allowGaitStepping
+      && groundedAfterControl
       && hasMovementInput
       && (gaitState.phase === "left-stance" || gaitState.phase === "right-stance")
       && gaitState.phaseDuration > 0
@@ -1438,7 +1683,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       );
     }
 
-    if (groundedAfterControl && swingSide && hasMovementInput) {
+    if (allowGaitStepping && groundedAfterControl && swingSide && hasMovementInput) {
       const swingFoot = swingSide === "left" ? leftFoot : rightFoot;
       const swingFootPosition = swingFoot.translation();
       const swingVelocity = swingFoot.linvel();
@@ -1488,6 +1733,8 @@ export function CharacterCtrlrActiveRagdollPlayer({
         );
       const desiredSwingHeight =
         supportCenter.y + stepHeightTarget * clearanceProfile;
+      footfallForwardError = desiredSwingForwardOffset - swingForwardOffset;
+      footfallLateralError = desiredSwingLateralOffset - swingLateralOffset;
       const swingPlacementStrength =
         supportStateAfterJump === "double"
           ? MathUtils.lerp(
@@ -1689,8 +1936,6 @@ export function CharacterCtrlrActiveRagdollPlayer({
       grounded: groundedAfterControl,
       supportState: supportStateAfterJump,
     };
-    const previousSnapshot = lastSnapshotRef.current;
-
     setPlayerSnapshot(snapshot);
     onSnapshotChange?.(snapshot);
     if (jumpTriggered) {
@@ -1700,17 +1945,24 @@ export function CharacterCtrlrActiveRagdollPlayer({
       onLand?.(snapshot);
     }
     lastSnapshotRef.current = snapshot;
+    const nextBalanceState =
+      recoveryState.mode === "stable"
+        ? deriveBalanceState(
+            groundedAfterControl,
+            supportStateAfterJump,
+            supportLateralError,
+            supportForwardError,
+            supportHeightError,
+          )
+        : recoveryState.mode === "jumping"
+          ? "unsupported"
+          : "recovering";
     locomotionDebugRef.current = {
       movementMode: nextMovementMode,
       gaitPhase: gaitState.phase,
       gaitTransitionReason: gaitState.transitionReason,
-      balanceState: deriveBalanceState(
-        groundedAfterControl,
-        supportStateAfterJump,
-        supportLateralError,
-        supportForwardError,
-        supportHeightError,
-      ),
+      balanceState: nextBalanceState,
+      recoveryState: recoveryState.mode,
       supportState: supportStateAfterJump,
       plannedSupportSide,
       swingSide,
@@ -1756,6 +2008,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
       stepLengthTarget,
       stepWidthTarget,
       stepHeightTarget,
+      footfallForwardError,
+      footfallLateralError,
+      recentTransitions: transitionHistoryRef.current,
     };
   });
 

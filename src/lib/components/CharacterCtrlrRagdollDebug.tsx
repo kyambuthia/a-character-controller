@@ -575,7 +575,7 @@ function DebugBoard({
               maxWidth={4.1}
               position={[0, -0.48, 0]}
             >
-              {`${locomotionDebugState.gaitPhase}  ${locomotionDebugState.balanceState}  support ${locomotionDebugState.supportState}`}
+              {`${locomotionDebugState.gaitPhase}  ${locomotionDebugState.balanceState}  ${locomotionDebugState.recoveryState}  support ${locomotionDebugState.supportState}`}
             </Text>
             <Text
               anchorX="center"
@@ -605,7 +605,7 @@ function DebugBoard({
               maxWidth={4.2}
               position={[0, -1.16, 0]}
             >
-              {`support err lat ${locomotionDebugState.supportLateralError.toFixed(2)}  fwd ${locomotionDebugState.supportForwardError.toFixed(2)}  h ${locomotionDebugState.supportHeightError.toFixed(2)}`}
+              {`plan stance ${locomotionDebugState.plannedSupportSide ?? "-"}  swing ${locomotionDebugState.swingSide ?? "-"}  foot err f ${locomotionDebugState.footfallForwardError.toFixed(2)}  l ${locomotionDebugState.footfallLateralError.toFixed(2)}`}
             </Text>
             <Text
               anchorX="center"
@@ -615,7 +615,7 @@ function DebugBoard({
               maxWidth={4.2}
               position={[0, -1.38, 0]}
             >
-              {`capture err lat ${locomotionDebugState.captureLateralError.toFixed(2)}  fwd ${locomotionDebugState.captureForwardError.toFixed(2)}  t ${locomotionDebugState.captureTime.toFixed(2)}`}
+              {`support err lat ${locomotionDebugState.supportLateralError.toFixed(2)}  fwd ${locomotionDebugState.supportForwardError.toFixed(2)}  h ${locomotionDebugState.supportHeightError.toFixed(2)}`}
             </Text>
             <Text
               anchorX="center"
@@ -625,7 +625,7 @@ function DebugBoard({
               maxWidth={4.4}
               position={[0, -1.6, 0]}
             >
-              {`com ${locomotionDebugState.centerOfMass[0].toFixed(2)} ${locomotionDebugState.centerOfMass[1].toFixed(2)} ${locomotionDebugState.centerOfMass[2].toFixed(2)}  cp ${locomotionDebugState.capturePoint[0].toFixed(2)} ${locomotionDebugState.capturePoint[2].toFixed(2)}`}
+              {`capture err lat ${locomotionDebugState.captureLateralError.toFixed(2)}  fwd ${locomotionDebugState.captureForwardError.toFixed(2)}  t ${locomotionDebugState.captureTime.toFixed(2)}`}
             </Text>
             <Text
               anchorX="center"
@@ -635,7 +635,7 @@ function DebugBoard({
               maxWidth={4.4}
               position={[0, -1.82, 0]}
             >
-              {`step len ${locomotionDebugState.stepLengthTarget.toFixed(2)}  width ${locomotionDebugState.stepWidthTarget.toFixed(2)}  height ${locomotionDebugState.stepHeightTarget.toFixed(2)}`}
+              {`com ${locomotionDebugState.centerOfMass[0].toFixed(2)} ${locomotionDebugState.centerOfMass[1].toFixed(2)} ${locomotionDebugState.centerOfMass[2].toFixed(2)}  cp ${locomotionDebugState.capturePoint[0].toFixed(2)} ${locomotionDebugState.capturePoint[2].toFixed(2)}`}
             </Text>
             <Text
               anchorX="center"
@@ -645,7 +645,27 @@ function DebugBoard({
               maxWidth={4.4}
               position={[0, -2.04, 0]}
             >
+              {`step len ${locomotionDebugState.stepLengthTarget.toFixed(2)}  width ${locomotionDebugState.stepWidthTarget.toFixed(2)}  height ${locomotionDebugState.stepHeightTarget.toFixed(2)}`}
+            </Text>
+            <Text
+              anchorX="center"
+              anchorY="middle"
+              color="#7ea4b3"
+              fontSize={0.08}
+              maxWidth={4.4}
+              position={[0, -2.26, 0]}
+            >
               {`footfall ${locomotionDebugState.plannedFootfall[0].toFixed(2)} ${locomotionDebugState.plannedFootfall[1].toFixed(2)} ${locomotionDebugState.plannedFootfall[2].toFixed(2)}`}
+            </Text>
+            <Text
+              anchorX="center"
+              anchorY="middle"
+              color="#6d8c99"
+              fontSize={0.075}
+              maxWidth={4.5}
+              position={[0, -2.48, 0]}
+            >
+              {`history ${locomotionDebugState.recentTransitions.join("  >  ") || "-"}`}
             </Text>
           </>
         ) : null}
@@ -654,7 +674,7 @@ function DebugBoard({
           anchorY="middle"
           color="#7ea4b3"
           fontSize={0.1}
-          position={[0, locomotionDebugState ? -2.3 : -0.48, 0]}
+          position={[0, locomotionDebugState ? -2.76 : -0.48, 0]}
         >
           frames {liveStepCount}
         </Text>
