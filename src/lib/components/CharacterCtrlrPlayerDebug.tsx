@@ -83,6 +83,11 @@ type PlayerDebugSnapshot = {
   liveStepCount: number;
 };
 
+type PlayerDebugLiveSnapshot = Omit<
+  PlayerDebugSnapshot,
+  "contacts" | "trail" | "ghosts" | "liveStepCount"
+>;
+
 type CharacterCtrlrPlayerDebugProps = {
   bodyRef: RefObject<RapierRigidBody | null>;
   capsuleHalfHeight: number;
@@ -115,6 +120,23 @@ const EMPTY_DEBUG_SNAPSHOT: PlayerDebugSnapshot = {
   liveStepCount: 0,
 };
 
+const EMPTY_LIVE_SNAPSHOT: PlayerDebugLiveSnapshot = {
+  bodyPosition: [0, 0, 0],
+  bodyQuaternion: [0, 0, 0, 1],
+  velocityEnd: [0, 0, 0],
+  facingEnd: [0, 0, 1],
+  movementMode: "idle",
+  grounded: false,
+  supportState: "none",
+  sleeping: false,
+  mass: 1,
+  linearVelocity: [0, 0, 0],
+  angularVelocity: [0, 0, 0],
+  linearSpeed: 0,
+  angularSpeed: 0,
+  joints: [],
+};
+
 const tempVector = new Vector3();
 const linkPairs = [
   ["pelvis", "spine"],
@@ -128,6 +150,34 @@ const linkPairs = [
   ["pelvis", "rightUpperLeg"],
   ["rightUpperLeg", "rightLowerLeg"],
 ] as const;
+
+function isValidRigidBody(
+  body: RapierRigidBody | null | undefined,
+): body is RapierRigidBody {
+  if (!body) {
+    return false;
+  }
+
+  try {
+    return body.isValid();
+  } catch {
+    return false;
+  }
+}
+
+function isValidCollider(
+  collider: ReturnType<RapierRigidBody["collider"]> | null | undefined,
+) {
+  if (!collider) {
+    return false;
+  }
+
+  try {
+    return collider.isValid();
+  } catch {
+    return false;
+  }
+}
 
 function toTuple3(value: { x: number; y: number; z: number }): CharacterCtrlrVec3 {
   return [value.x, value.y, value.z];
@@ -434,6 +484,77 @@ function buildSnapshot(
   bodyRef: RefObject<RapierRigidBody | null>,
   debugStateRef: PlayerDebugStateRef,
   joints: JointRefMap,
+): PlayerDebugLiveSnapshot {
+  const body = bodyRef.current;
+  const debugState = debugStateRef.current;
+
+  if (!isValidRigidBody(body) || !debugState) {
+    return EMPTY_LIVE_SNAPSHOT;
+  }
+
+  try {
+    const translation = body.translation();
+    const rotation = body.rotation();
+    const linearVelocity = body.linvel();
+    const angularVelocity = body.angvel();
+    const velocityScale = 0.2;
+    const facingScale = 1;
+    const bodyPosition: CharacterCtrlrVec3 = [translation.x, translation.y, translation.z];
+    const linearSpeed = Math.hypot(linearVelocity.x, linearVelocity.y, linearVelocity.z);
+    const angularSpeed = Math.hypot(angularVelocity.x, angularVelocity.y, angularVelocity.z);
+    const velocityEnd: CharacterCtrlrVec3 = [
+      translation.x + linearVelocity.x * velocityScale,
+      translation.y + 0.35 + linearVelocity.y * velocityScale,
+      translation.z + linearVelocity.z * velocityScale,
+    ];
+    const facingEnd: CharacterCtrlrVec3 = [
+      translation.x + Math.sin(debugState.facing) * facingScale,
+      translation.y + 0.6,
+      translation.z + Math.cos(debugState.facing) * facingScale,
+    ];
+
+    const jointRefs: Array<[string, RefObject<Group | null>]> = [
+      ["pelvis", joints.pelvisRef],
+      ["spine", joints.spineRef],
+      ["head", joints.headRef],
+      ["leftUpperArm", joints.leftUpperArmRef],
+      ["leftLowerArm", joints.leftLowerArmRef],
+      ["rightUpperArm", joints.rightUpperArmRef],
+      ["rightLowerArm", joints.rightLowerArmRef],
+      ["leftUpperLeg", joints.leftUpperLegRef],
+      ["leftLowerLeg", joints.leftLowerLegRef],
+      ["rightUpperLeg", joints.rightUpperLegRef],
+      ["rightLowerLeg", joints.rightLowerLegRef],
+    ];
+    const jointEntries: JointSnapshot[] = jointRefs.flatMap(([key, ref]) => {
+      const position = getGroupPosition(ref);
+      return position ? [{ key, position }] : [];
+    });
+
+    return {
+      bodyPosition,
+      bodyQuaternion: toTuple4(rotation),
+      velocityEnd,
+      facingEnd,
+      movementMode: debugState.movementMode,
+      grounded: debugState.grounded,
+      supportState: debugState.supportState,
+      sleeping: body.isSleeping(),
+      mass: typeof body.mass === "function" ? body.mass() : 1,
+      linearVelocity: toTuple3(linearVelocity),
+      angularVelocity: toTuple3(angularVelocity),
+      linearSpeed,
+      angularSpeed,
+      joints: jointEntries,
+    };
+  } catch {
+    return EMPTY_LIVE_SNAPSHOT;
+  }
+}
+
+function buildDiagnosticsSnapshot(
+  liveSnapshot: PlayerDebugLiveSnapshot,
+  bodyRef: RefObject<RapierRigidBody | null>,
   world: ReturnType<typeof useRapier>["world"],
   colliderStates: ReturnType<typeof useRapier>["colliderStates"],
   liveStepCount: number,
@@ -443,58 +564,31 @@ function buildSnapshot(
   lastGhostAt: MutableRefObject<number>,
 ) {
   const body = bodyRef.current;
-  const debugState = debugStateRef.current;
 
-  if (!body || !debugState) {
-    return EMPTY_DEBUG_SNAPSHOT;
+  if (!isValidRigidBody(body)) {
+    return {
+      ...EMPTY_DEBUG_SNAPSHOT,
+      ...liveSnapshot,
+      contacts: [],
+      trail: trailPoints.current ?? [],
+      ghosts: ghostSnapshots.current ?? [],
+      liveStepCount,
+    } satisfies PlayerDebugSnapshot;
   }
 
-  const translation = body.translation();
-  const rotation = body.rotation();
-  const linearVelocity = body.linvel();
-  const angularVelocity = body.angvel();
-  const velocityScale = 0.2;
-  const facingScale = 1;
-  const bodyPosition: CharacterCtrlrVec3 = [translation.x, translation.y, translation.z];
-  const linearSpeed = Math.hypot(linearVelocity.x, linearVelocity.y, linearVelocity.z);
-  const angularSpeed = Math.hypot(angularVelocity.x, angularVelocity.y, angularVelocity.z);
-  const velocityEnd: CharacterCtrlrVec3 = [
-    translation.x + linearVelocity.x * velocityScale,
-    translation.y + 0.35 + linearVelocity.y * velocityScale,
-    translation.z + linearVelocity.z * velocityScale,
-  ];
-  const facingEnd: CharacterCtrlrVec3 = [
-    translation.x + Math.sin(debugState.facing) * facingScale,
-    translation.y + 0.6,
-    translation.z + Math.cos(debugState.facing) * facingScale,
-  ];
-
-  const jointRefs: Array<[string, RefObject<Group | null>]> = [
-    ["pelvis", joints.pelvisRef],
-    ["spine", joints.spineRef],
-    ["head", joints.headRef],
-    ["leftUpperArm", joints.leftUpperArmRef],
-    ["leftLowerArm", joints.leftLowerArmRef],
-    ["rightUpperArm", joints.rightUpperArmRef],
-    ["rightLowerArm", joints.rightLowerArmRef],
-    ["leftUpperLeg", joints.leftUpperLegRef],
-    ["leftLowerLeg", joints.leftLowerLegRef],
-    ["rightUpperLeg", joints.rightUpperLegRef],
-    ["rightLowerLeg", joints.rightLowerLegRef],
-  ];
-  const jointEntries: JointSnapshot[] = jointRefs.flatMap(([key, ref]) => {
-    const position = getGroupPosition(ref);
-    return position ? [{ key, position }] : [];
-  });
-
-  const nextTrail = [...(trailPoints.current ?? []), bodyPosition].slice(-18);
+  const nextTrail = [...(trailPoints.current ?? []), liveSnapshot.bodyPosition].slice(-18);
   trailPoints.current = nextTrail;
-
   const contacts: ContactSnapshot[] = [];
   for (let index = 0; index < body.numColliders(); index += 1) {
-    const collider = body.collider(index);
+    let collider;
 
-    if (!collider) {
+    try {
+      collider = body.collider(index);
+    } catch {
+      continue;
+    }
+
+    if (!isValidCollider(collider)) {
       continue;
     }
 
@@ -505,42 +599,52 @@ function buildSnapshot(
         continue;
       }
 
-      const parent = otherCollider.parent();
+      let parent;
 
-      if (parent?.handle === body.handle) {
+      try {
+        parent = otherCollider.parent();
+      } catch {
         continue;
       }
 
-      world.contactPair(collider, otherCollider, (manifold, flipped) => {
-        const normal = manifold.normal();
-        const orientation = flipped ? -1 : 1;
+      if (isValidRigidBody(parent) && parent.handle === body.handle) {
+        continue;
+      }
 
-        for (let contactIndex = 0; contactIndex < manifold.numSolverContacts(); contactIndex += 1) {
-          const point = manifold.solverContactPoint(contactIndex);
-          const localPoint: CharacterCtrlrVec3 = [point.x, point.y, point.z];
-          const normalEnd: CharacterCtrlrVec3 = [
-            localPoint[0] + normal.x * 0.42 * orientation,
-            localPoint[1] + normal.y * 0.42 * orientation,
-            localPoint[2] + normal.z * 0.42 * orientation,
-          ];
-          const intensity =
-            manifold.numContacts() > 0
-              ? Math.min(
-                  1,
-                  manifold.contactImpulse(
-                    Math.min(contactIndex, manifold.numContacts() - 1),
-                  ) / 2.8,
-                )
-              : 0.15;
+      try {
+        world.contactPair(collider, otherCollider, (manifold, flipped) => {
+          const normal = manifold.normal();
+          const orientation = flipped ? -1 : 1;
 
-          contacts.push({
-            key: `${collider.handle}:${otherCollider.handle}:${contactIndex}`,
-            point: localPoint,
-            normalEnd,
-            intensity,
-          });
-        }
-      });
+          for (let contactIndex = 0; contactIndex < manifold.numSolverContacts(); contactIndex += 1) {
+            const point = manifold.solverContactPoint(contactIndex);
+            const localPoint: CharacterCtrlrVec3 = [point.x, point.y, point.z];
+            const normalEnd: CharacterCtrlrVec3 = [
+              localPoint[0] + normal.x * 0.42 * orientation,
+              localPoint[1] + normal.y * 0.42 * orientation,
+              localPoint[2] + normal.z * 0.42 * orientation,
+            ];
+            const intensity =
+              manifold.numContacts() > 0
+                ? Math.min(
+                    1,
+                    manifold.contactImpulse(
+                      Math.min(contactIndex, manifold.numContacts() - 1),
+                    ) / 2.8,
+                  )
+                : 0.15;
+
+            contacts.push({
+              key: `${collider.handle}:${otherCollider.handle}:${contactIndex}`,
+              point: localPoint,
+              normalEnd,
+              intensity,
+            });
+          }
+        });
+      } catch {
+        continue;
+      }
     }
   }
 
@@ -550,9 +654,9 @@ function buildSnapshot(
     ghostSnapshots.current = [
       {
         id: ghostId.current,
-        position: bodyPosition,
-        quaternion: toTuple4(rotation),
-        sleeping: body.isSleeping(),
+        position: liveSnapshot.bodyPosition,
+        quaternion: liveSnapshot.bodyQuaternion,
+        sleeping: liveSnapshot.sleeping,
       },
       ...(ghostSnapshots.current ?? []),
     ].slice(0, 4);
@@ -560,20 +664,7 @@ function buildSnapshot(
   }
 
   return {
-    bodyPosition,
-    bodyQuaternion: toTuple4(rotation),
-    velocityEnd,
-    facingEnd,
-    movementMode: debugState.movementMode,
-    grounded: debugState.grounded,
-    supportState: debugState.supportState,
-    sleeping: body.isSleeping(),
-    mass: typeof body.mass === "function" ? body.mass() : 1,
-    linearVelocity: toTuple3(linearVelocity),
-    angularVelocity: toTuple3(angularVelocity),
-    linearSpeed,
-    angularSpeed,
-    joints: jointEntries,
+    ...liveSnapshot,
     contacts,
     trail: nextTrail,
     ghosts: ghostSnapshots.current ?? [],
@@ -592,7 +683,8 @@ export function CharacterCtrlrPlayerDebug({
   manualStepCount = 0,
 }: CharacterCtrlrPlayerDebugProps) {
   const rapier = useRapier();
-  const [snapshot, setSnapshot] = useState<PlayerDebugSnapshot>(EMPTY_DEBUG_SNAPSHOT);
+  const [liveSnapshot, setLiveSnapshot] = useState<PlayerDebugLiveSnapshot>(EMPTY_LIVE_SNAPSHOT);
+  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState<PlayerDebugSnapshot>(EMPTY_DEBUG_SNAPSHOT);
   const capsuleMeshRef = useRef<Mesh>(null);
   const liveStepCount = useRef(0);
   const trailPoints = useRef<CharacterCtrlrVec3[]>([]);
@@ -601,31 +693,29 @@ export function CharacterCtrlrPlayerDebug({
   const lastGhostAt = useRef(0);
 
   useEffect(() => {
-    startTransition(() => {
-      setSnapshot(
-        buildSnapshot(
-          bodyRef,
-          debugStateRef,
-          joints,
-          rapier.world,
-          rapier.colliderStates,
-          liveStepCount.current,
-          trailPoints,
-          ghostSnapshots,
-          ghostId,
-          lastGhostAt,
-        ),
-      );
-    });
+    const nextLiveSnapshot = buildSnapshot(bodyRef, debugStateRef, joints);
+    setLiveSnapshot(nextLiveSnapshot);
+    setDiagnosticsSnapshot(
+      buildDiagnosticsSnapshot(
+        nextLiveSnapshot,
+        bodyRef,
+        rapier.world,
+        rapier.colliderStates,
+        liveStepCount.current,
+        trailPoints,
+        ghostSnapshots,
+        ghostId,
+        lastGhostAt,
+      ),
+    );
   }, [bodyRef, debugStateRef, joints, rapier.colliderStates, rapier.world]);
 
   useAfterPhysicsStep(() => {
     liveStepCount.current += 1;
 
-    const nextSnapshot = buildSnapshot(
+    const nextDiagnosticsSnapshot = buildDiagnosticsSnapshot(
+      buildSnapshot(bodyRef, debugStateRef, joints),
       bodyRef,
-      debugStateRef,
-      joints,
       rapier.world,
       rapier.colliderStates,
       liveStepCount.current,
@@ -636,7 +726,7 @@ export function CharacterCtrlrPlayerDebug({
     );
 
     startTransition(() => {
-      setSnapshot(nextSnapshot);
+      setDiagnosticsSnapshot(nextDiagnosticsSnapshot);
     });
   });
 
@@ -644,18 +734,27 @@ export function CharacterCtrlrPlayerDebug({
     const body = bodyRef.current;
     const capsuleMesh = capsuleMeshRef.current;
 
-    if (!body || !capsuleMesh) {
+    if (!isValidRigidBody(body) || !capsuleMesh) {
       return;
     }
 
-    const translation = body.translation();
-    capsuleMesh.position.set(
-      translation.x,
-      translation.y + capsuleHalfHeight + capsuleRadius,
-      translation.z,
-    );
+    try {
+      const translation = body.translation();
+      capsuleMesh.position.set(
+        translation.x,
+        translation.y + capsuleHalfHeight + capsuleRadius,
+        translation.z,
+      );
+      setLiveSnapshot(buildSnapshot(bodyRef, debugStateRef, joints));
+    } catch {
+      setLiveSnapshot(EMPTY_LIVE_SNAPSHOT);
+    }
   });
 
+  const snapshot: PlayerDebugSnapshot = {
+    ...diagnosticsSnapshot,
+    ...liveSnapshot,
+  };
   const jointMap = new Map(snapshot.joints.map((joint) => [joint.key, joint.position]));
 
   return (

@@ -140,13 +140,29 @@ function localize(point: { x: number; y: number; z: number }, origin: CharacterC
 function isValidRigidBody(
   body: RapierRigidBody | null | undefined,
 ): body is RapierRigidBody {
-  return !!body && body.isValid();
+  if (!body) {
+    return false;
+  }
+
+  try {
+    return body.isValid();
+  } catch {
+    return false;
+  }
 }
 
 function isValidCollider(
   collider: RapierCollider | null | undefined,
 ): collider is RapierCollider {
-  return !!collider && collider.isValid();
+  if (!collider) {
+    return false;
+  }
+
+  try {
+    return collider.isValid();
+  } catch {
+    return false;
+  }
 }
 
 function worldPointFromLocal(
@@ -680,7 +696,7 @@ function buildSnapshot(
       try {
         const parent = otherCollider.parent();
 
-        if (parent?.isValid() && ragdollBodyHandles.has(parent.handle)) {
+        if (isValidRigidBody(parent) && ragdollBodyHandles.has(parent.handle)) {
           continue;
         }
 
