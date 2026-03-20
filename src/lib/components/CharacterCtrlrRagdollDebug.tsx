@@ -1,3 +1,4 @@
+import { useFrame } from "@react-three/fiber";
 import { Billboard, Line, Text } from "@react-three/drei";
 import {
   useAfterPhysicsStep,
@@ -114,6 +115,11 @@ type RagdollDebugSnapshot = {
   liveStepCount: number;
 };
 
+type RagdollDebugLiveSnapshot = Pick<
+  RagdollDebugSnapshot,
+  "bodies" | "joints" | "centerOfMass"
+>;
+
 const EMPTY_DEBUG_SNAPSHOT: RagdollDebugSnapshot = {
   bodies: [],
   joints: [],
@@ -122,6 +128,12 @@ const EMPTY_DEBUG_SNAPSHOT: RagdollDebugSnapshot = {
   trails: [],
   ghosts: [],
   liveStepCount: 0,
+};
+
+const EMPTY_LIVE_SNAPSHOT: RagdollDebugLiveSnapshot = {
+  bodies: [],
+  joints: [],
+  centerOfMass: [0, 0, 0],
 };
 
 const tempVector = new Vector3();
@@ -687,17 +699,8 @@ function buildSnapshot(
   bodies: CharacterCtrlrRagdollBodyDescriptor[],
   joints: CharacterCtrlrRagdollJointDescriptor[],
   origin: CharacterCtrlrVec3,
-  world: ReturnType<typeof useRapier>["world"],
-  colliderStates: ReturnType<typeof useRapier>["colliderStates"],
-  liveStepCount: number,
-  ghostSnapshots: MutableRefObject<GhostSnapshot[]>,
-  trailPoints: MutableRefObject<Record<string, CharacterCtrlrVec3[]>>,
-  ghostId: MutableRefObject<number>,
-  lastGhostAt: MutableRefObject<number>,
-) {
+): RagdollDebugLiveSnapshot {
   const bodySnapshots: BodySnapshot[] = [];
-  const ragdollBodyHandles = new Set<number>();
-  const ragdollColliders: Array<{ bodyKey: string; collider: RapierCollider }> = [];
   let totalMass = 0;
 
   for (const descriptor of bodies) {
@@ -717,19 +720,6 @@ function buildSnapshot(
     const angularSpeed = Math.hypot(angularVelocity.x, angularVelocity.y, angularVelocity.z);
 
     totalMass += mass;
-    ragdollBodyHandles.add(body.handle);
-
-    for (let index = 0; index < body.numColliders(); index += 1) {
-      const collider = body.collider(index);
-
-      if (isValidCollider(collider)) {
-        ragdollColliders.push({ bodyKey: descriptor.key, collider });
-      }
-    }
-
-    const trail = trailPoints.current[descriptor.key] ?? [];
-    trail.push(position);
-    trailPoints.current[descriptor.key] = trail.slice(-18);
 
     bodySnapshots.push({
       key: descriptor.key,
@@ -746,19 +736,6 @@ function buildSnapshot(
       angularSpeed,
     });
   }
-
-  const centerOfMass =
-    totalMass > 0
-      ? (bodySnapshots.reduce(
-          (accumulator, body) => {
-            accumulator[0] += body.position[0] * body.mass;
-            accumulator[1] += body.position[1] * body.mass;
-            accumulator[2] += body.position[2] * body.mass;
-            return accumulator;
-          },
-          [0, 0, 0] as CharacterCtrlrVec3,
-        ).map((value) => value / totalMass) as CharacterCtrlrVec3)
-      : ([0, 0, 0] as CharacterCtrlrVec3);
 
   const jointSnapshots = joints.flatMap((joint) => {
     const bodyA = joint.bodyA.current;
@@ -784,6 +761,65 @@ function buildSnapshot(
       } satisfies JointSnapshot,
     ];
   });
+
+  const centerOfMass =
+    totalMass > 0
+      ? (bodySnapshots.reduce(
+          (accumulator, body) => {
+            accumulator[0] += body.position[0] * body.mass;
+            accumulator[1] += body.position[1] * body.mass;
+            accumulator[2] += body.position[2] * body.mass;
+            return accumulator;
+          },
+          [0, 0, 0] as CharacterCtrlrVec3,
+        ).map((value) => value / totalMass) as CharacterCtrlrVec3)
+      : ([0, 0, 0] as CharacterCtrlrVec3);
+
+  return {
+    bodies: bodySnapshots,
+    joints: jointSnapshots,
+    centerOfMass,
+  } satisfies RagdollDebugLiveSnapshot;
+}
+
+function buildDiagnosticsSnapshot(
+  liveSnapshot: RagdollDebugLiveSnapshot,
+  bodies: CharacterCtrlrRagdollBodyDescriptor[],
+  origin: CharacterCtrlrVec3,
+  world: ReturnType<typeof useRapier>["world"],
+  colliderStates: ReturnType<typeof useRapier>["colliderStates"],
+  liveStepCount: number,
+  ghostSnapshots: MutableRefObject<GhostSnapshot[]>,
+  trailPoints: MutableRefObject<Record<string, CharacterCtrlrVec3[]>>,
+  ghostId: MutableRefObject<number>,
+  lastGhostAt: MutableRefObject<number>,
+): RagdollDebugSnapshot {
+  const ragdollBodyHandles = new Set<number>();
+  const ragdollColliders: Array<{ bodyKey: string; collider: RapierCollider }> = [];
+
+  for (const descriptor of bodies) {
+    const body = descriptor.ref.current;
+
+    if (!isValidRigidBody(body)) {
+      continue;
+    }
+
+    ragdollBodyHandles.add(body.handle);
+
+    for (let index = 0; index < body.numColliders(); index += 1) {
+      const collider = body.collider(index);
+
+      if (isValidCollider(collider)) {
+        ragdollColliders.push({ bodyKey: descriptor.key, collider });
+      }
+    }
+  }
+
+  for (const body of liveSnapshot.bodies) {
+    const trail = trailPoints.current[body.key] ?? [];
+    trail.push(body.position);
+    trailPoints.current[body.key] = trail.slice(-18);
+  }
 
   const contacts: ContactSnapshot[] = [];
   const visitedPairs = new Set<string>();
@@ -859,12 +895,12 @@ function buildSnapshot(
   }
 
   const now = performance.now();
-  if (now - lastGhostAt.current > 180 && bodySnapshots.length > 0) {
+  if (now - lastGhostAt.current > 180 && liveSnapshot.bodies.length > 0) {
     ghostId.current += 1;
     ghostSnapshots.current = [
       {
         id: ghostId.current,
-        bodies: bodySnapshots.map((body) => ({
+        bodies: liveSnapshot.bodies.map((body) => ({
           key: body.key,
           shape: body.shape,
           position: body.position,
@@ -878,11 +914,11 @@ function buildSnapshot(
   }
 
   return {
-    bodies: bodySnapshots,
-    joints: jointSnapshots,
+    bodies: liveSnapshot.bodies,
+    joints: liveSnapshot.joints,
     contacts,
-    centerOfMass,
-    trails: bodySnapshots.map((body) => ({
+    centerOfMass: liveSnapshot.centerOfMass,
+    trails: liveSnapshot.bodies.map((body) => ({
       key: body.key,
       sleeping: body.sleeping,
       points: trailPoints.current[body.key] ?? [],
@@ -907,14 +943,19 @@ export function CharacterCtrlrRagdollDebug({
   const ghostId = useRef(0);
   const lastGhostAt = useRef(0);
   const liveStepCount = useRef(0);
-  const [snapshot, setSnapshot] = useState<RagdollDebugSnapshot>(EMPTY_DEBUG_SNAPSHOT);
+  const [liveSnapshot, setLiveSnapshot] = useState<RagdollDebugLiveSnapshot>(EMPTY_LIVE_SNAPSHOT);
+  const [diagnosticsSnapshot, setDiagnosticsSnapshot] = useState<RagdollDebugSnapshot>(
+    EMPTY_DEBUG_SNAPSHOT,
+  );
 
   useEffect(() => {
+    const nextLiveSnapshot = buildSnapshot(bodies, joints, origin);
+    setLiveSnapshot(nextLiveSnapshot);
     startTransition(() => {
-      setSnapshot(
-        buildSnapshot(
+      setDiagnosticsSnapshot(
+        buildDiagnosticsSnapshot(
+          nextLiveSnapshot,
           bodies,
-          joints,
           origin,
           rapier.world,
           rapier.colliderStates,
@@ -926,14 +967,19 @@ export function CharacterCtrlrRagdollDebug({
         ),
       );
     });
-  }, [bodies, joints, origin, rapier.colliderStates]);
+  }, [bodies, joints, origin, rapier.colliderStates, rapier.world]);
 
   useAfterPhysicsStep(() => {
     liveStepCount.current += 1;
 
-    const nextSnapshot = buildSnapshot(
+    const nextLiveSnapshot = buildSnapshot(
       bodies,
       joints,
+      origin,
+    );
+    const nextDiagnosticsSnapshot = buildDiagnosticsSnapshot(
+      nextLiveSnapshot,
+      bodies,
       origin,
       rapier.world,
       rapier.colliderStates,
@@ -945,9 +991,18 @@ export function CharacterCtrlrRagdollDebug({
     );
 
     startTransition(() => {
-      setSnapshot(nextSnapshot);
+      setDiagnosticsSnapshot(nextDiagnosticsSnapshot);
     });
   });
+
+  useFrame(() => {
+    setLiveSnapshot(buildSnapshot(bodies, joints, origin));
+  });
+
+  const snapshot: RagdollDebugSnapshot = {
+    ...diagnosticsSnapshot,
+    ...liveSnapshot,
+  };
 
   return (
     <group userData={{ characterCtrlrIgnoreCameraOcclusion: true }}>
