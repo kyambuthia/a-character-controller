@@ -12,6 +12,7 @@ import {
 import {
   CharacterCtrlrActiveRagdollPlayer,
   CharacterCtrlrCameraRig,
+  type CharacterCtrlrMixamoMotionSource,
   CharacterCtrlrPlayer,
   CharacterCtrlrProvider,
   CharacterCtrlrRagdollDummy,
@@ -21,6 +22,24 @@ const DEMO_PLAYER_MODE =
   new URLSearchParams(window.location.search).get("player") === "capsule"
     ? "capsule"
     : "ragdoll";
+const DEMO_MOTION_MODE =
+  new URLSearchParams(window.location.search).get("motion") === "mixamo"
+    ? "mixamo"
+    : "procedural";
+const DEMO_MIXAMO_SOURCE: CharacterCtrlrMixamoMotionSource | undefined =
+  DEMO_MOTION_MODE === "mixamo"
+    ? {
+        rigUrl: "/mixamo/character.fbx",
+        clips: {
+          idle: "/mixamo/idle.fbx",
+          walk: "/mixamo/walk.fbx",
+          run: "/mixamo/run.fbx",
+          crouch: "/mixamo/crouch-walk.fbx",
+          jump: "/mixamo/jump.fbx",
+        },
+        blend: 0.9,
+      }
+    : undefined;
 
 function DemoPhysicsStepper({
   paused,
@@ -92,6 +111,7 @@ function DemoScene() {
                 controls="keyboard"
                 debug
                 inputRef={touchInputRef}
+                mixamoSource={DEMO_MIXAMO_SOURCE}
                 position={[0, 2.5, 6]}
               />
             ) : (

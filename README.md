@@ -160,6 +160,7 @@ Useful exported types:
 `CharacterCtrlrActiveRagdollPlayer` supports:
 
 - the same input and lifecycle callback shape as `CharacterCtrlrPlayer`
+- optional `mixamoSource` loading for hidden animation-target retargeting into the active ragdoll joint motors
 - experimental tunables for `jumpImpulse`, `uprightTorque`, `turnTorque`, and `balanceDamping`
 - experimental camera-target tuning with `cameraFocusSmoothing`, `cameraFocusHeight`, and `cameraFocusLead`
 - `debug` to view the articulated rig through the ragdoll debug overlay
@@ -215,6 +216,11 @@ Demo tip:
 
 - the demo now defaults to the active ragdoll player
 - add `?player=capsule` to the dev URL to load the capsule baseline instead
+- add `?motion=mixamo` to enable the optional Mixamo target path in the ragdoll demo once the FBX files are placed in `public/mixamo`
+
+Mixamo tip:
+
+- see [docs/MIXAMO.md](./docs/MIXAMO.md) for the expected FBX downloads, file layout, and `mixamoSource` usage
 
 ## Design direction
 

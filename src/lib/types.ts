@@ -6,6 +6,41 @@ export type CharacterCtrlrMovementMode =
   | "jump"
   | "fall";
 
+export type CharacterCtrlrMixamoClipUrls = {
+  idle: string;
+  walk: string;
+  run?: string;
+  crouch?: string;
+  jump?: string;
+};
+
+export type CharacterCtrlrMixamoBoneMap = {
+  hips: string;
+  spine: string;
+  chest: string;
+  head: string;
+  upperLegLeft: string;
+  lowerLegLeft: string;
+  footLeft: string;
+  upperArmLeft: string;
+  lowerArmLeft: string;
+  handLeft: string;
+  upperLegRight: string;
+  lowerLegRight: string;
+  footRight: string;
+  upperArmRight: string;
+  lowerArmRight: string;
+  handRight: string;
+};
+
+export type CharacterCtrlrMixamoMotionSource = {
+  rigUrl: string;
+  clips: CharacterCtrlrMixamoClipUrls;
+  boneMap?: Partial<CharacterCtrlrMixamoBoneMap>;
+  blend?: number;
+  playbackRate?: Partial<Record<CharacterCtrlrMovementMode, number>>;
+};
+
 export type CharacterCtrlrSupportState = "none" | "left" | "right" | "double";
 
 export type CharacterCtrlrGaitPhase =
@@ -68,6 +103,7 @@ export type CharacterCtrlrLocomotionDebugState = {
   gaitTransitionReason: CharacterCtrlrGaitTransitionReason;
   balanceState: CharacterCtrlrBalanceState;
   recoveryState: CharacterCtrlrRecoveryState;
+  jointCalibrationReady: boolean;
   supportState: CharacterCtrlrSupportState;
   plannedSupportSide: "left" | "right" | null;
   swingSide: "left" | "right" | null;
@@ -97,6 +133,22 @@ export type CharacterCtrlrLocomotionDebugState = {
   stepLengthTarget: number;
   stepWidthTarget: number;
   stepHeightTarget: number;
+  legJointAngles: {
+    hipLeft: number;
+    hipRight: number;
+    kneeLeft: number;
+    kneeRight: number;
+    ankleLeft: number;
+    ankleRight: number;
+  };
+  legJointTargets: {
+    hipLeft: number;
+    hipRight: number;
+    kneeLeft: number;
+    kneeRight: number;
+    ankleLeft: number;
+    ankleRight: number;
+  };
   footfallForwardError: number;
   footfallLateralError: number;
   recentTransitions: string[];

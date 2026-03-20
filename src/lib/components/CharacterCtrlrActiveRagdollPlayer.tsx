@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import {
   type CollisionEnterPayload,
   type CollisionExitPayload,
+  type RapierRigidBody,
 } from "@react-three/rapier";
 import {
   useEffect,
@@ -18,6 +19,7 @@ import {
   type CharacterCtrlrBalanceState,
   type CharacterCtrlrGaitPhase,
   type CharacterCtrlrGaitTransitionReason,
+  type CharacterCtrlrMixamoMotionSource,
   mergeCharacterCtrlrInput,
   type CharacterCtrlrInputState,
   type CharacterCtrlrLocomotionDebugState,
@@ -28,12 +30,18 @@ import {
   type CharacterCtrlrVec3,
 } from "../types";
 import {
+  CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS,
   createCharacterCtrlrHumanoidBodyRefs,
   createCharacterCtrlrHumanoidRevoluteJointRefs,
   type CharacterCtrlrHumanoidBodyKey,
+  type CharacterCtrlrHumanoidRevoluteJointKey,
   type CharacterCtrlrHumanoidRevoluteJointRefs,
 } from "./CharacterCtrlrHumanoidData";
 import { CharacterCtrlrHumanoidRagdoll } from "./CharacterCtrlrHumanoidRagdoll";
+import {
+  CharacterCtrlrMixamoMotionDriver,
+  type CharacterCtrlrMixamoPoseTargets,
+} from "./CharacterCtrlrMixamoMotionDriver";
 
 const forward = new Vector3();
 const right = new Vector3();
@@ -62,6 +70,12 @@ const tempMassPosition = new Vector3();
 const tempMassVelocity = new Vector3();
 const footQuaternion = new Quaternion();
 const footEuler = new Euler(0, 0, 0, "YXZ");
+const segmentQuaternion = new Quaternion();
+const segmentEuler = new Euler(0, 0, 0, "YXZ");
+const jointParentQuaternion = new Quaternion();
+const jointChildQuaternion = new Quaternion();
+const jointRelativeQuaternion = new Quaternion();
+const jointRelativeEuler = new Euler(0, 0, 0, "XYZ");
 
 const GRAVITY = 9.81;
 const FOOT_SUPPORT_OFFSET = 0.08;
@@ -69,6 +83,13 @@ const STAND_PELVIS_HEIGHT = 1.76;
 const STAND_ASSIST_MAX_SPEED = 0.42;
 const STAND_FOOT_LATERAL_OFFSET = 0.18;
 const STAND_FOOT_FORWARD_OFFSET = 0.12;
+const STAND_SEGMENT_MAX_TORQUE = 0.6;
+const REVOLUTE_JOINT_LIMITS = Object.fromEntries(
+  CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS.map((definition) => [
+    definition.key,
+    definition.limits,
+  ]),
+) as Record<CharacterCtrlrHumanoidRevoluteJointKey, [number, number]>;
 
 type SupportSide = "left" | "right";
 
@@ -400,6 +421,7 @@ export type CharacterCtrlrActiveRagdollPlayerProps = {
   controls?: "keyboard" | "none";
   input?: Partial<CharacterCtrlrInputState>;
   inputRef?: RefObject<CharacterCtrlrInputState | null>;
+  mixamoSource?: CharacterCtrlrMixamoMotionSource;
   walkSpeed?: number;
   runSpeed?: number;
   crouchSpeed?: number;
@@ -460,6 +482,31 @@ function driveJointToPosition(
   }
 
   joint.configureMotorPosition(targetPosition, stiffness, damping);
+}
+
+function sampleRevoluteJointAngle(
+  bodyA: RapierRigidBody,
+  bodyB: RapierRigidBody,
+) {
+  const parentRotation = bodyA.rotation();
+  const childRotation = bodyB.rotation();
+
+  jointParentQuaternion.set(
+    parentRotation.x,
+    parentRotation.y,
+    parentRotation.z,
+    parentRotation.w,
+  );
+  jointChildQuaternion.set(
+    childRotation.x,
+    childRotation.y,
+    childRotation.z,
+    childRotation.w,
+  );
+  jointRelativeQuaternion.copy(jointParentQuaternion).invert().multiply(jointChildQuaternion);
+  jointRelativeEuler.setFromQuaternion(jointRelativeQuaternion, "XYZ");
+
+  return jointRelativeEuler.x;
 }
 
 function getGaitConfig(
@@ -867,11 +914,43 @@ function applyStandingPoseTargets(targets: PhasePoseTargets) {
   } satisfies PhasePoseTargets;
 }
 
+function blendPhasePoseTargets(
+  baseTargets: PhasePoseTargets,
+  targetTargets: CharacterCtrlrMixamoPoseTargets,
+  blend: number,
+) {
+  const weight = MathUtils.clamp(blend, 0, 1);
+
+  return {
+    pelvisPitch: MathUtils.lerp(baseTargets.pelvisPitch, targetTargets.pelvisPitch, weight),
+    pelvisRoll: MathUtils.lerp(baseTargets.pelvisRoll, targetTargets.pelvisRoll, weight),
+    chestPitch: MathUtils.lerp(baseTargets.chestPitch, targetTargets.chestPitch, weight),
+    chestRoll: MathUtils.lerp(baseTargets.chestRoll, targetTargets.chestRoll, weight),
+    left: {
+      hip: MathUtils.lerp(baseTargets.left.hip, targetTargets.left.hip, weight),
+      knee: MathUtils.lerp(baseTargets.left.knee, targetTargets.left.knee, weight),
+      ankle: MathUtils.lerp(baseTargets.left.ankle, targetTargets.left.ankle, weight),
+      shoulder: MathUtils.lerp(baseTargets.left.shoulder, targetTargets.left.shoulder, weight),
+      elbow: MathUtils.lerp(baseTargets.left.elbow, targetTargets.left.elbow, weight),
+      wrist: MathUtils.lerp(baseTargets.left.wrist, targetTargets.left.wrist, weight),
+    },
+    right: {
+      hip: MathUtils.lerp(baseTargets.right.hip, targetTargets.right.hip, weight),
+      knee: MathUtils.lerp(baseTargets.right.knee, targetTargets.right.knee, weight),
+      ankle: MathUtils.lerp(baseTargets.right.ankle, targetTargets.right.ankle, weight),
+      shoulder: MathUtils.lerp(baseTargets.right.shoulder, targetTargets.right.shoulder, weight),
+      elbow: MathUtils.lerp(baseTargets.right.elbow, targetTargets.right.elbow, weight),
+      wrist: MathUtils.lerp(baseTargets.right.wrist, targetTargets.right.wrist, weight),
+    },
+  } satisfies PhasePoseTargets;
+}
+
 export function CharacterCtrlrActiveRagdollPlayer({
   position = [0, 2.5, 6],
   controls = "keyboard",
   input,
   inputRef,
+  mixamoSource,
   walkSpeed = 2.7,
   runSpeed = 4.7,
   crouchSpeed = 1.7,
@@ -903,6 +982,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const rightSupportContactsRef = useRef<Map<number, number>>(new Map());
   const supportStateRef = useRef<CharacterCtrlrSupportState>("none");
   const movementModeRef = useRef<CharacterCtrlrMovementMode>("idle");
+  const hasMovementInputRef = useRef(false);
   const jumpHeldRef = useRef(false);
   const gaitPhaseRef = useRef(0);
   const gaitStateRef = useRef<GaitState>({
@@ -924,6 +1004,10 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const locomotionDebugRef = useRef<CharacterCtrlrLocomotionDebugState | null>(null);
   const initialPositionRef = useRef(position);
   const standingFootPlantRef = useRef<StandingFootPlant | null>(null);
+  const mixamoPoseRef = useRef<CharacterCtrlrMixamoPoseTargets | null>(null);
+  const jointCalibrationRef = useRef<Partial<Record<CharacterCtrlrHumanoidRevoluteJointKey, number>>>({});
+  const jointCalibrationReadyRef = useRef(false);
+  const debugLogCooldownRef = useRef(0);
 
   const updateGrounded = (nextGrounded: boolean) => {
     if (groundedRef.current === nextGrounded) {
@@ -1015,11 +1099,46 @@ export function CharacterCtrlrActiveRagdollPlayer({
   useFrame((_, delta) => {
     const pelvis = bodyRefs.pelvis.current;
     const chest = bodyRefs.chest.current;
+    const upperLegLeft = bodyRefs.upperLegLeft.current;
+    const lowerLegLeft = bodyRefs.lowerLegLeft.current;
     const leftFoot = bodyRefs.footLeft.current;
+    const upperLegRight = bodyRefs.upperLegRight.current;
+    const lowerLegRight = bodyRefs.lowerLegRight.current;
     const rightFoot = bodyRefs.footRight.current;
 
-    if (!pelvis || !chest || !leftFoot || !rightFoot) {
+    if (
+      !pelvis
+      || !chest
+      || !upperLegLeft
+      || !lowerLegLeft
+      || !leftFoot
+      || !upperLegRight
+      || !lowerLegRight
+      || !rightFoot
+    ) {
       return;
+    }
+
+    if (!jointCalibrationReadyRef.current) {
+      const nextCalibration: Partial<Record<CharacterCtrlrHumanoidRevoluteJointKey, number>> = {};
+      let calibrationReady = true;
+
+      for (const definition of CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS) {
+        const bodyA = bodyRefs[definition.bodyA].current;
+        const bodyB = bodyRefs[definition.bodyB].current;
+
+        if (!bodyA || !bodyB) {
+          calibrationReady = false;
+          break;
+        }
+
+        nextCalibration[definition.key] = sampleRevoluteJointAngle(bodyA, bodyB);
+      }
+
+      if (calibrationReady) {
+        jointCalibrationRef.current = nextCalibration;
+        jointCalibrationReadyRef.current = true;
+      }
     }
 
     const internalInput =
@@ -1039,6 +1158,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
     if (keys.left) movement.sub(right);
 
     const hasMovementInput = movement.lengthSq() > 0;
+    hasMovementInputRef.current = hasMovementInput;
     if (hasMovementInput) {
       movement.normalize();
     }
@@ -1133,6 +1253,12 @@ export function CharacterCtrlrActiveRagdollPlayer({
     const pelvisTorqueScale = grounded ? 1 : airControl;
     const yawError = angleDifference(pelvisEuler.y, targetFacing);
     const horizontalSpeed = Math.hypot(currentVelocity.x, currentVelocity.z);
+    const standingAssistRequested =
+      grounded
+      && (
+        !hasMovementInput
+        || horizontalSpeed < STAND_ASSIST_MAX_SPEED
+      );
     const speedRatio = Math.min(1, horizontalSpeed / Math.max(0.001, runSpeed));
     const commandEffort = hasMovementInput ? gaitConfig.commandEffort : 0;
     const gaitEffort =
@@ -1150,7 +1276,10 @@ export function CharacterCtrlrActiveRagdollPlayer({
       gaitPhaseRef.current += delta * cadence;
     }
 
-    const supportStateForPhase = supportStateAfterJump;
+    const supportStateForPhase =
+      standingAssistRequested && supportStateAfterJump !== "none"
+        ? "double"
+        : supportStateAfterJump;
     if (!grounded || supportStateForPhase === "none") {
       transitionGaitState(
         gaitState,
@@ -1276,9 +1405,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
         ? "left"
         : gaitState.phase === "right-stance"
           ? "right"
-          : supportStateAfterJump === "left"
+          : supportStateForPhase === "left"
             ? "left"
-            : supportStateAfterJump === "right"
+            : supportStateForPhase === "right"
               ? "right"
               : null;
     const swingSide: SupportSide | null =
@@ -1303,11 +1432,14 @@ export function CharacterCtrlrActiveRagdollPlayer({
     const standingSupport =
       groundedAfterControl
       && (
-        !hasMovementInput
-        || horizontalSpeed < STAND_ASSIST_MAX_SPEED
+        standingAssistRequested
         || gaitState.phase === "idle"
         || gaitState.phase === "double-support"
       );
+    const supportStateForControl =
+      standingSupport && supportStateAfterJump !== "none"
+        ? "double"
+        : supportStateAfterJump;
     const stepLengthTarget =
       groundedAfterControl && hasMovementInput
         ? MathUtils.lerp(gaitConfig.step.length[0], gaitConfig.step.length[1], gaitEffort)
@@ -1384,7 +1516,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       supportCenter.set(0, 0, 0);
       let supportPointCount = 0;
 
-      if (supportStateAfterJump === "left" || supportStateAfterJump === "double") {
+      if (supportStateForControl === "left" || supportStateForControl === "double") {
         const leftFootPosition = leftFoot.translation();
         supportCenter.add(
           tempFootPosition.set(
@@ -1396,7 +1528,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
         supportPointCount += 1;
       }
 
-      if (supportStateAfterJump === "right" || supportStateAfterJump === "double") {
+      if (supportStateForControl === "right" || supportStateForControl === "double") {
         const rightFootPosition = rightFoot.translation();
         supportCenter.add(
           tempFootPosition.set(
@@ -1422,7 +1554,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
                 gaitConfig.step.pelvisLeadScale[1],
                 gaitEffort,
               )
-              * (supportStateAfterJump === "double" ? 0.82 : 1.05)
+              * (supportStateForControl === "double" ? 0.82 : 1.05)
             : 0;
         const captureHeight = Math.max(0.2, centerOfMassPosition.y - supportCenter.y);
         captureTime = Math.sqrt(captureHeight / GRAVITY);
@@ -1462,11 +1594,11 @@ export function CharacterCtrlrActiveRagdollPlayer({
         const correctedLateralError = lateralError + captureLateralFeedback;
         const correctedForwardError = forwardError + captureForwardFeedback;
         const supportCentering =
-          supportStateAfterJump === "double"
+          supportStateForControl === "double"
             ? gaitConfig.support.centering.double
             : gaitConfig.support.centering.single;
         const supportForwarding =
-          supportStateAfterJump === "double"
+          supportStateForControl === "double"
             ? MathUtils.lerp(
                 gaitConfig.support.forwarding.double[0],
                 gaitConfig.support.forwarding.double[1],
@@ -1543,7 +1675,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       }
     }
 
-    if (supportStateAfterJump === "none") {
+    if (supportStateForControl === "none") {
       const desiredFootCenterY =
         rootPosition.y - STAND_PELVIS_HEIGHT + FOOT_SUPPORT_OFFSET;
       const applyUnsupportedFootReach = (
@@ -1624,16 +1756,16 @@ export function CharacterCtrlrActiveRagdollPlayer({
       applyUnsupportedFootReach(rightFoot, 1);
     }
 
-    if (standingSupport && groundedAfterControl && supportStateAfterJump !== "none") {
+    if (standingSupport && groundedAfterControl && supportStateForControl !== "none") {
       const leftFootPosition = leftFoot.translation();
       const rightFootPosition = rightFoot.translation();
       const supportPlaneY =
-        supportStateAfterJump === "double"
+        supportStateForControl === "double"
           ? (
               (leftFootPosition.y - FOOT_SUPPORT_OFFSET)
               + (rightFootPosition.y - FOOT_SUPPORT_OFFSET)
             ) * 0.5
-          : supportStateAfterJump === "left"
+          : supportStateForControl === "left"
             ? leftFootPosition.y - FOOT_SUPPORT_OFFSET
             : rightFootPosition.y - FOOT_SUPPORT_OFFSET;
 
@@ -1734,6 +1866,50 @@ export function CharacterCtrlrActiveRagdollPlayer({
       standingFootPlantRef.current = null;
     }
 
+    if (standingSupport && groundedAfterControl) {
+      const applyStandingSegmentTorque = (
+        body: typeof upperLegLeft,
+        targetPitch: number,
+        stiffness: number,
+        damping: number,
+      ) => {
+        const bodyRotation = body.rotation();
+        const bodyAngularVelocity = body.angvel();
+        const bodyMass = body.mass();
+
+        segmentQuaternion.set(
+          bodyRotation.x,
+          bodyRotation.y,
+          bodyRotation.z,
+          bodyRotation.w,
+        );
+        segmentEuler.setFromQuaternion(segmentQuaternion, "YXZ");
+
+        body.applyTorqueImpulse(
+          {
+            x: MathUtils.clamp(
+              (
+                (targetPitch - segmentEuler.x) * stiffness
+                - bodyAngularVelocity.x * damping
+              ) * bodyMass * delta,
+              -STAND_SEGMENT_MAX_TORQUE,
+              STAND_SEGMENT_MAX_TORQUE,
+            ),
+            y: 0,
+            z: 0,
+          },
+          true,
+        );
+      };
+
+      applyStandingSegmentTorque(upperLegLeft, 0.02, 9.5, 3.8);
+      applyStandingSegmentTorque(lowerLegLeft, 0.01, 11.5, 4.6);
+      applyStandingSegmentTorque(leftFoot, 0.04, 8.4, 3.4);
+      applyStandingSegmentTorque(upperLegRight, 0.02, 9.5, 3.8);
+      applyStandingSegmentTorque(lowerLegRight, 0.01, 11.5, 4.6);
+      applyStandingSegmentTorque(rightFoot, 0.04, 8.4, 3.4);
+    }
+
     const recoveryState = recoveryStateRef.current;
     recoveryState.elapsed += delta;
     const pelvisTilt = Math.max(
@@ -1825,6 +2001,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
     );
     if (standingSupport) {
       phasePoseTargets = applyStandingPoseTargets(phasePoseTargets);
+    }
+    if (mixamoSource && mixamoPoseRef.current) {
+      phasePoseTargets = blendPhasePoseTargets(
+        phasePoseTargets,
+        mixamoPoseRef.current,
+        mixamoSource.blend ?? 0.88,
+      );
     }
 
     const recoveryTorqueBoost =
@@ -2065,75 +2248,118 @@ export function CharacterCtrlrActiveRagdollPlayer({
       );
     }
 
+    const resolveJointTarget = (
+      key: CharacterCtrlrHumanoidRevoluteJointKey,
+      targetOffset: number,
+    ) => {
+      const baseline = jointCalibrationRef.current[key] ?? 0;
+      const [min, max] = REVOLUTE_JOINT_LIMITS[key];
+
+      return MathUtils.clamp(baseline + targetOffset, min, max);
+    };
+
+    const hipLeftTarget = resolveJointTarget(
+      "hipLeft",
+      MathUtils.clamp(phasePoseTargets.left.hip - airborneAmount * 0.04, -0.9, 0.7),
+    );
+    const hipRightTarget = resolveJointTarget(
+      "hipRight",
+      MathUtils.clamp(phasePoseTargets.right.hip - airborneAmount * 0.04, -0.9, 0.7),
+    );
+    const shoulderLeftTarget = resolveJointTarget(
+      "shoulderLeft",
+      MathUtils.clamp(phasePoseTargets.left.shoulder, -1.1, 0.9),
+    );
+    const shoulderRightTarget = resolveJointTarget(
+      "shoulderRight",
+      MathUtils.clamp(phasePoseTargets.right.shoulder, -1.1, 0.9),
+    );
+    const kneeLeftTarget = resolveJointTarget("kneeLeft", phasePoseTargets.left.knee);
+    const kneeRightTarget = resolveJointTarget("kneeRight", phasePoseTargets.right.knee);
+    const ankleLeftTarget = resolveJointTarget("ankleLeft", phasePoseTargets.left.ankle);
+    const ankleRightTarget = resolveJointTarget("ankleRight", phasePoseTargets.right.ankle);
+    const elbowLeftTarget = resolveJointTarget("elbowLeft", phasePoseTargets.left.elbow);
+    const elbowRightTarget = resolveJointTarget("elbowRight", phasePoseTargets.right.elbow);
+    const wristLeftTarget = resolveJointTarget("wristLeft", phasePoseTargets.left.wrist);
+    const wristRightTarget = resolveJointTarget("wristRight", phasePoseTargets.right.wrist);
+    const liveLegJointAngles = {
+      hipLeft: sampleRevoluteJointAngle(pelvis, upperLegLeft),
+      hipRight: sampleRevoluteJointAngle(pelvis, upperLegRight),
+      kneeLeft: sampleRevoluteJointAngle(upperLegLeft, lowerLegLeft),
+      kneeRight: sampleRevoluteJointAngle(upperLegRight, lowerLegRight),
+      ankleLeft: sampleRevoluteJointAngle(lowerLegLeft, leftFoot),
+      ankleRight: sampleRevoluteJointAngle(lowerLegRight, rightFoot),
+    };
+
     driveJointToPosition(
       jointRefs.hipLeft.current,
-      MathUtils.clamp(phasePoseTargets.left.hip - airborneAmount * 0.04, -0.9, 0.7),
+      hipLeftTarget,
       groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
       groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
     );
     driveJointToPosition(
       jointRefs.hipRight.current,
-      MathUtils.clamp(phasePoseTargets.right.hip - airborneAmount * 0.04, -0.9, 0.7),
+      hipRightTarget,
       groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
       groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
     );
     driveJointToPosition(
       jointRefs.shoulderLeft.current,
-      MathUtils.clamp(phasePoseTargets.left.shoulder, -1.1, 0.9),
+      shoulderLeftTarget,
       8.4,
       2.2,
     );
     driveJointToPosition(
       jointRefs.shoulderRight.current,
-      MathUtils.clamp(phasePoseTargets.right.shoulder, -1.1, 0.9),
+      shoulderRightTarget,
       8.4,
       2.2,
     );
     driveJointToPosition(
       jointRefs.kneeLeft.current,
-      phasePoseTargets.left.knee,
+      kneeLeftTarget,
       groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
       groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
     );
     driveJointToPosition(
       jointRefs.kneeRight.current,
-      phasePoseTargets.right.knee,
+      kneeRightTarget,
       groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
       groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
     );
     driveJointToPosition(
       jointRefs.ankleLeft.current,
-      phasePoseTargets.left.ankle,
+      ankleLeftTarget,
       groundedAfterControl ? (standingSupport ? 28 : 15) : 9,
       groundedAfterControl ? (standingSupport ? 6.8 : 3.1) : 2.3,
     );
     driveJointToPosition(
       jointRefs.ankleRight.current,
-      phasePoseTargets.right.ankle,
+      ankleRightTarget,
       groundedAfterControl ? (standingSupport ? 28 : 15) : 9,
       groundedAfterControl ? (standingSupport ? 6.8 : 3.1) : 2.3,
     );
     driveJointToPosition(
       jointRefs.elbowLeft.current,
-      phasePoseTargets.left.elbow,
+      elbowLeftTarget,
       5.2,
       1.8,
     );
     driveJointToPosition(
       jointRefs.elbowRight.current,
-      phasePoseTargets.right.elbow,
+      elbowRightTarget,
       5.2,
       1.8,
     );
     driveJointToPosition(
       jointRefs.wristLeft.current,
-      phasePoseTargets.left.wrist,
+      wristLeftTarget,
       3.8,
       1.4,
     );
     driveJointToPosition(
       jointRefs.wristRight.current,
-      phasePoseTargets.right.wrist,
+      wristRightTarget,
       3.8,
       1.4,
     );
@@ -2224,6 +2450,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       gaitTransitionReason: gaitState.transitionReason,
       balanceState: nextBalanceState,
       recoveryState: recoveryState.mode,
+      jointCalibrationReady: jointCalibrationReadyRef.current,
       supportState: supportStateAfterJump,
       plannedSupportSide,
       swingSide,
@@ -2269,10 +2496,112 @@ export function CharacterCtrlrActiveRagdollPlayer({
       stepLengthTarget,
       stepWidthTarget,
       stepHeightTarget,
+      legJointAngles: liveLegJointAngles,
+      legJointTargets: {
+        hipLeft: hipLeftTarget,
+        hipRight: hipRightTarget,
+        kneeLeft: kneeLeftTarget,
+        kneeRight: kneeRightTarget,
+        ankleLeft: ankleLeftTarget,
+        ankleRight: ankleRightTarget,
+      },
       footfallForwardError,
       footfallLateralError,
       recentTransitions: transitionHistoryRef.current,
     };
+
+    if (debug) {
+      if (typeof window !== "undefined") {
+        (
+          window as typeof window & {
+            __characterCtrlrActiveRagdollDebug?: unknown;
+          }
+        ).__characterCtrlrActiveRagdollDebug = {
+          movementMode: nextMovementMode,
+          grounded: groundedAfterControl,
+          standingSupport,
+          supportState: supportStateAfterJump,
+          gaitPhase: gaitState.phase,
+          recoveryState: recoveryState.mode,
+          jointCalibrationReady: jointCalibrationReadyRef.current,
+          jointCalibration: jointCalibrationRef.current,
+          legJointAngles: liveLegJointAngles,
+          legJointTargets: {
+            hipLeft: hipLeftTarget,
+            hipRight: hipRightTarget,
+            kneeLeft: kneeLeftTarget,
+            kneeRight: kneeRightTarget,
+            ankleLeft: ankleLeftTarget,
+            ankleRight: ankleRightTarget,
+          },
+          supportErrors: {
+            lateral: supportLateralError,
+            forward: supportForwardError,
+            height: supportHeightError,
+          },
+          captureErrors: {
+            lateral: captureLateralError,
+            forward: captureForwardError,
+            urgency: captureUrgency,
+          },
+          centerOfMass: {
+            x: centerOfMassPosition.x,
+            y: centerOfMassPosition.y,
+            z: centerOfMassPosition.z,
+          },
+          supportCenter: {
+            x: supportCenter.x,
+            y: supportCenter.y,
+            z: supportCenter.z,
+          },
+        };
+      }
+
+      debugLogCooldownRef.current -= delta;
+
+      if (debugLogCooldownRef.current <= 0) {
+        debugLogCooldownRef.current = 0.4;
+        console.log("[CharacterCtrlrActiveRagdollPlayer]", {
+          movementMode: nextMovementMode,
+          grounded: groundedAfterControl,
+          standingSupport,
+          supportState: supportStateAfterJump,
+          gaitPhase: gaitState.phase,
+          recoveryState: recoveryState.mode,
+          jointCalibrationReady: jointCalibrationReadyRef.current,
+          jointCalibration: jointCalibrationRef.current,
+          legJointAngles: liveLegJointAngles,
+          legJointTargets: {
+            hipLeft: hipLeftTarget,
+            hipRight: hipRightTarget,
+            kneeLeft: kneeLeftTarget,
+            kneeRight: kneeRightTarget,
+            ankleLeft: ankleLeftTarget,
+            ankleRight: ankleRightTarget,
+          },
+          supportErrors: {
+            lateral: supportLateralError,
+            forward: supportForwardError,
+            height: supportHeightError,
+          },
+          captureErrors: {
+            lateral: captureLateralError,
+            forward: captureForwardError,
+            urgency: captureUrgency,
+          },
+          centerOfMass: {
+            x: centerOfMassPosition.x,
+            y: centerOfMassPosition.y,
+            z: centerOfMassPosition.z,
+          },
+          supportCenter: {
+            x: supportCenter.x,
+            y: supportCenter.y,
+            z: supportCenter.z,
+          },
+        });
+      }
+    }
   });
 
   const articulatedBodyProps: Partial<
@@ -2360,22 +2689,33 @@ export function CharacterCtrlrActiveRagdollPlayer({
   };
 
   return (
-    <CharacterCtrlrHumanoidRagdoll
-      bodyProps={articulatedBodyProps}
-      bodyRefs={bodyRefs}
-      debug={debug}
-      ignoreCameraOcclusion
-      locomotionDebugRef={locomotionDebugRef}
-      position={position}
-      revoluteJointRefs={jointRefs}
-      sharedBodyProps={{
-        additionalSolverIterations: 16,
-        angularDamping: 5.2,
-        canSleep: false,
-        ccd: true,
-        linearDamping: 2.4,
-        softCcdPrediction: 0.25,
-      }}
-    />
+    <>
+      {mixamoSource ? (
+        <CharacterCtrlrMixamoMotionDriver
+          groundedRef={groundedRef}
+          hasMovementInputRef={hasMovementInputRef}
+          movementModeRef={movementModeRef}
+          poseRef={mixamoPoseRef}
+          source={mixamoSource}
+        />
+      ) : null}
+      <CharacterCtrlrHumanoidRagdoll
+        bodyProps={articulatedBodyProps}
+        bodyRefs={bodyRefs}
+        debug={debug}
+        ignoreCameraOcclusion
+        locomotionDebugRef={locomotionDebugRef}
+        position={position}
+        revoluteJointRefs={jointRefs}
+        sharedBodyProps={{
+          additionalSolverIterations: 16,
+          angularDamping: 5.2,
+          canSleep: false,
+          ccd: true,
+          linearDamping: 2.4,
+          softCcdPrediction: 0.25,
+        }}
+      />
+    </>
   );
 }

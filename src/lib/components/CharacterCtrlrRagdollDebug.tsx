@@ -540,7 +540,7 @@ function DebugBoard({
     <Billboard position={[0, 4.9, 0]}>
       <group>
         <mesh position={[0, 0, -0.02]}>
-          <planeGeometry args={[4.8, 1.55]} />
+          <planeGeometry args={[4.8, 1.95]} />
           <meshBasicMaterial
             color="#061521"
             depthWrite={false}
@@ -672,10 +672,30 @@ function DebugBoard({
             <Text
               anchorX="center"
               anchorY="middle"
-              color="#6d8c99"
+              color={locomotionDebugState.jointCalibrationReady ? "#8dd9b8" : "#e3a984"}
               fontSize={0.075}
               maxWidth={4.5}
               position={[0, -2.48, 0]}
+            >
+              {`joint calib ${locomotionDebugState.jointCalibrationReady ? "ready" : "pending"}  hip ${locomotionDebugState.legJointAngles.hipLeft.toFixed(2)}/${locomotionDebugState.legJointTargets.hipLeft.toFixed(2)}  ${locomotionDebugState.legJointAngles.hipRight.toFixed(2)}/${locomotionDebugState.legJointTargets.hipRight.toFixed(2)}`}
+            </Text>
+            <Text
+              anchorX="center"
+              anchorY="middle"
+              color="#7ea4b3"
+              fontSize={0.075}
+              maxWidth={4.5}
+              position={[0, -2.68, 0]}
+            >
+              {`knee ${locomotionDebugState.legJointAngles.kneeLeft.toFixed(2)}/${locomotionDebugState.legJointTargets.kneeLeft.toFixed(2)}  ${locomotionDebugState.legJointAngles.kneeRight.toFixed(2)}/${locomotionDebugState.legJointTargets.kneeRight.toFixed(2)}  ankle ${locomotionDebugState.legJointAngles.ankleLeft.toFixed(2)}/${locomotionDebugState.legJointTargets.ankleLeft.toFixed(2)}  ${locomotionDebugState.legJointAngles.ankleRight.toFixed(2)}/${locomotionDebugState.legJointTargets.ankleRight.toFixed(2)}`}
+            </Text>
+            <Text
+              anchorX="center"
+              anchorY="middle"
+              color="#6d8c99"
+              fontSize={0.075}
+              maxWidth={4.5}
+              position={[0, -2.88, 0]}
             >
               {`history ${locomotionDebugState.recentTransitions.join("  >  ") || "-"}`}
             </Text>
@@ -686,7 +706,7 @@ function DebugBoard({
           anchorY="middle"
           color="#7ea4b3"
           fontSize={0.1}
-          position={[0, locomotionDebugState ? -2.76 : -0.48, 0]}
+          position={[0, locomotionDebugState ? -3.16 : -0.48, 0]}
         >
           frames {liveStepCount}
         </Text>
