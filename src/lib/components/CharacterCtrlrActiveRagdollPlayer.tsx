@@ -75,6 +75,11 @@ import {
   transitionRecoveryState,
 } from "./active-ragdoll/gait";
 import { angleDifference, sampleRevoluteJointAngle } from "./active-ragdoll/math";
+import {
+  deriveCapturePoint,
+  deriveSupportMeasurement,
+  measureCenterOfMass,
+} from "./active-ragdoll/measurements";
 import { driveJointToPosition, resolveJointTarget } from "./active-ragdoll/motors";
 import {
   applyRecoveryPoseTargets,
@@ -86,6 +91,7 @@ import {
   deriveStandingPoseTargets,
   deriveStandingTargetFacing,
 } from "./active-ragdoll/standing";
+import { deriveSwingStepPlan } from "./active-ragdoll/stepPlanner";
 import type {
   ContactTrackingState,
   GaitState,
@@ -118,8 +124,6 @@ const centerOfMassPosition = new Vector3();
 const centerOfMassVelocity = new Vector3();
 const capturePointPosition = new Vector3();
 const plannedFootfallPosition = new Vector3();
-const tempMassPosition = new Vector3();
-const tempMassVelocity = new Vector3();
 const footQuaternion = new Quaternion();
 const footEuler = new Euler(0, 0, 0, "YXZ");
 const segmentQuaternion = new Quaternion();
@@ -681,51 +685,22 @@ export function CharacterCtrlrActiveRagdollPlayer({
         ? MathUtils.lerp(gaitConfig.step.height[0], gaitConfig.step.height[1], gaitEffort)
         : 0.02;
 
-    centerOfMassPosition.set(0, 0, 0);
-    centerOfMassVelocity.set(0, 0, 0);
-    let totalTrackedMass = 0;
-    for (const bodyRef of bodyRefList) {
-      const body = bodyRef.current;
-
-      if (!body) {
-        continue;
-      }
-
-      const bodyMass = body.mass();
-      if (!Number.isFinite(bodyMass) || bodyMass <= 0) {
-        continue;
-      }
-
-      const bodyPosition = body.translation();
-      const bodyVelocity = body.linvel();
-      centerOfMassPosition.add(
-        tempMassPosition.set(
-          bodyPosition.x,
-          bodyPosition.y,
-          bodyPosition.z,
-        ).multiplyScalar(bodyMass),
-      );
-      centerOfMassVelocity.add(
-        tempMassVelocity.set(
-          bodyVelocity.x,
-          bodyVelocity.y,
-          bodyVelocity.z,
-        ).multiplyScalar(bodyMass),
-      );
-      totalTrackedMass += bodyMass;
-    }
-
-    if (totalTrackedMass > 0) {
-      centerOfMassPosition.divideScalar(totalTrackedMass);
-      centerOfMassVelocity.divideScalar(totalTrackedMass);
-    } else {
-      centerOfMassPosition.set(rootPosition.x, rootPosition.y, rootPosition.z);
-      centerOfMassVelocity.set(
-        currentVelocity.x,
-        currentVelocity.y,
-        currentVelocity.z,
-      );
-    }
+    const centerOfMassMeasurement = measureCenterOfMass({
+      bodyRefs: bodyRefList,
+      fallbackPosition: [rootPosition.x, rootPosition.y, rootPosition.z],
+      fallbackVelocity: [currentVelocity.x, currentVelocity.y, currentVelocity.z],
+    });
+    const totalTrackedMass = centerOfMassMeasurement.totalTrackedMass;
+    centerOfMassPosition.set(
+      centerOfMassMeasurement.position[0],
+      centerOfMassMeasurement.position[1],
+      centerOfMassMeasurement.position[2],
+    );
+    centerOfMassVelocity.set(
+      centerOfMassMeasurement.velocity[0],
+      centerOfMassMeasurement.velocity[1],
+      centerOfMassMeasurement.velocity[2],
+    );
     const supportMass = Math.max(
       pelvisMass + chestMass,
       totalTrackedMass * (standingSupport ? 0.9 : 0.78),
@@ -742,35 +717,20 @@ export function CharacterCtrlrActiveRagdollPlayer({
     plannedFootfallPosition.set(rootPosition.x, rootPosition.y, rootPosition.z);
 
     if (groundedAfterControl) {
-      supportCenter.set(0, 0, 0);
-      let supportPointCount = 0;
-
-      if (supportStateForControl === "left" || supportStateForControl === "double") {
-        const leftFootPosition = leftFoot.translation();
-        supportCenter.add(
-          tempFootPosition.set(
-            leftFootPosition.x,
-            leftFootPosition.y - FOOT_SUPPORT_OFFSET,
-            leftFootPosition.z,
-          ),
-        );
-        supportPointCount += 1;
-      }
-
-      if (supportStateForControl === "right" || supportStateForControl === "double") {
-        const rightFootPosition = rightFoot.translation();
-        supportCenter.add(
-          tempFootPosition.set(
-            rightFootPosition.x,
-            rightFootPosition.y - FOOT_SUPPORT_OFFSET,
-            rightFootPosition.z,
-          ),
-        );
-        supportPointCount += 1;
-      }
+      const supportMeasurement = deriveSupportMeasurement({
+        rootPosition: [rootPosition.x, rootPosition.y, rootPosition.z],
+        supportState: supportStateForControl,
+        leftFootPosition: [leftFootPos.x, leftFootPos.y, leftFootPos.z],
+        rightFootPosition: [rightFootPos.x, rightFootPos.y, rightFootPos.z],
+      });
+      const supportPointCount = supportMeasurement.pointCount;
 
       if (supportPointCount > 0) {
-        supportCenter.divideScalar(supportPointCount);
+        supportCenter.set(
+          supportMeasurement.center[0],
+          supportMeasurement.center[1],
+          supportMeasurement.center[2],
+        );
 
         const lateralError =
           (supportCenter.x - rootPosition.x) * facingRight.x
@@ -785,12 +745,25 @@ export function CharacterCtrlrActiveRagdollPlayer({
               )
               * (supportStateForControl === "double" ? 0.82 : 1.05)
             : 0;
-        const captureHeight = Math.max(0.2, centerOfMassPosition.y - supportCenter.y);
-        captureTime = Math.sqrt(captureHeight / GRAVITY);
+        const capturePointMeasurement = deriveCapturePoint({
+          centerOfMass: [
+            centerOfMassPosition.x,
+            centerOfMassPosition.y,
+            centerOfMassPosition.z,
+          ],
+          centerOfMassVelocity: [
+            centerOfMassVelocity.x,
+            centerOfMassVelocity.y,
+            centerOfMassVelocity.z,
+          ],
+          supportPlaneY: supportMeasurement.supportPlaneY,
+          gravity: GRAVITY,
+        });
+        captureTime = capturePointMeasurement.captureTime;
         capturePointPosition.set(
-          centerOfMassPosition.x + centerOfMassVelocity.x * captureTime,
-          supportCenter.y,
-          centerOfMassPosition.z + centerOfMassVelocity.z * captureTime,
+          capturePointMeasurement.point[0],
+          capturePointMeasurement.point[1],
+          capturePointMeasurement.point[2],
         );
         captureLateralError =
           (capturePointPosition.x - supportCenter.x) * facingRight.x
@@ -1396,16 +1369,15 @@ export function CharacterCtrlrActiveRagdollPlayer({
 
     if (allowGaitStepping && groundedAfterControl && swingSide && locomotionCommandActive) {
       const swingFoot = swingSide === "left" ? leftFoot : rightFoot;
+      const stanceFoot = swingSide === "left" ? rightFoot : leftFoot;
       const swingFootPosition = swingFoot.translation();
+      const stanceFootPosition = stanceFoot.translation();
       const swingVelocity = swingFoot.linvel();
       const swingMass = swingFoot.mass();
       const swingProgress =
         gaitState.phase === "left-stance" || gaitState.phase === "right-stance"
           ? gaitPhaseValue
           : 0.5;
-      const clearanceProfile = Math.sin(
-        Math.PI * MathUtils.clamp(swingProgress, 0, 1),
-      );
       const swingBlend =
         Math.min(1, delta * 5.4)
         * (supportStateAfterJump === "double" ? 1 : 0.68);
@@ -1415,72 +1387,51 @@ export function CharacterCtrlrActiveRagdollPlayer({
       const swingLateralOffset =
         (swingFootPosition.x - rootPosition.x) * facingRight.x
         + (swingFootPosition.z - rootPosition.z) * facingRight.z;
-      const baseSwingForwardOffset =
-        MathUtils.lerp(-stepLengthTarget * 0.36, stepLengthTarget * 0.72, swingProgress)
-        * (supportStateAfterJump === "double" ? 1.05 : 0.9);
-      const baseSwingLateralOffset =
-        (swingSide === "left" ? -1 : 1) * stepWidthTarget;
-      const desiredSwingForwardOffset =
-        baseSwingForwardOffset
-        + MathUtils.clamp(
-          captureForwardError * MathUtils.lerp(
-            gaitConfig.support.captureFeedback.swingForward[0],
-            gaitConfig.support.captureFeedback.swingForward[1],
-            gaitEffort,
-          ),
-          -0.12,
-          0.26,
-        );
-      const desiredSwingLateralOffset =
-        baseSwingLateralOffset
-        + MathUtils.clamp(
-          captureLateralError * MathUtils.lerp(
-            gaitConfig.support.captureFeedback.swingLateral[0],
-            gaitConfig.support.captureFeedback.swingLateral[1],
-            gaitEffort,
-          ),
-          -0.12,
-          0.12,
-        );
-      const desiredSwingHeight =
-        supportCenter.y + stepHeightTarget * clearanceProfile;
+      const stepPlan = deriveSwingStepPlan({
+        swingSide,
+        supportCenter: [supportCenter.x, supportCenter.y, supportCenter.z],
+        rootPosition: [rootPosition.x, rootPosition.y, rootPosition.z],
+        stanceFootPosition: [
+          stanceFootPosition.x,
+          stanceFootPosition.y,
+          stanceFootPosition.z,
+        ],
+        facingForward: [facingForward.x, facingForward.y, facingForward.z],
+        facingRight: [facingRight.x, facingRight.y, facingRight.z],
+        stepLengthTarget,
+        stepWidthTarget,
+        stepHeightTarget,
+        gaitEffort,
+        gaitConfig,
+        swingProgress,
+        supportState: supportStateAfterJump,
+        captureUrgency,
+        captureForwardError,
+        captureLateralError,
+        yawError,
+      });
+      const desiredSwingForwardOffset = stepPlan.desiredSwingForwardOffset;
+      const desiredSwingLateralOffset = stepPlan.desiredSwingLateralOffset;
+      const desiredSwingHeight = stepPlan.desiredSwingHeight;
       footfallForwardError = desiredSwingForwardOffset - swingForwardOffset;
       footfallLateralError = desiredSwingLateralOffset - swingLateralOffset;
-      const swingPlacementStrength =
-        supportStateAfterJump === "double"
-          ? MathUtils.lerp(
-              gaitConfig.swing.placement.double[0],
-              gaitConfig.swing.placement.double[1],
-              gaitEffort,
-            )
-          : MathUtils.lerp(
-              gaitConfig.swing.placement.single[0],
-              gaitConfig.swing.placement.single[1],
-              gaitEffort,
-            )
-            + captureUrgency * 1.2;
-      const swingDrive = MathUtils.lerp(
-        gaitConfig.swing.drive[0],
-        gaitConfig.swing.drive[1],
-        gaitEffort,
-      );
+      const swingPlacementStrength = stepPlan.swingPlacementStrength;
+      const swingDrive = stepPlan.swingDrive;
       const swingHeightError = desiredSwingHeight - swingFootPosition.y;
       const swingHeightDrive = MathUtils.clamp(
         (
-          swingHeightError * MathUtils.lerp(
-            gaitConfig.swing.heightDrive[0],
-            gaitConfig.swing.heightDrive[1],
-            gaitEffort,
-          )
+          swingHeightError * stepPlan.swingHeightDriveGain
           - swingVelocity.y * 1.9
         ) * swingMass * swingBlend,
         0,
         swingMass * (0.45 + stepHeightTarget * 2.6 + captureUrgency * 0.18),
       );
 
-      plannedFootfallPosition.copy(supportCenter);
-      plannedFootfallPosition.addScaledVector(facingForward, desiredSwingForwardOffset);
-      plannedFootfallPosition.addScaledVector(facingRight, desiredSwingLateralOffset);
+      plannedFootfallPosition.set(
+        stepPlan.plannedFootfall[0],
+        stepPlan.plannedFootfall[1],
+        stepPlan.plannedFootfall[2],
+      );
 
       swingCorrection
         .copy(facingForward)
