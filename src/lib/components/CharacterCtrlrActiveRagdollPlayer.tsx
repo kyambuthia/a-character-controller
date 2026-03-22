@@ -957,7 +957,7 @@ function blendPhasePoseTargets(
 }
 
 export function CharacterCtrlrActiveRagdollPlayer({
-  position = [0, 2.5, 6],
+  position = [0, 2.02, 6],
   controls = "keyboard",
   input,
   inputRef,

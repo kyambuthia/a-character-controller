@@ -40,6 +40,7 @@ const DEMO_MIXAMO_SOURCE: CharacterCtrlrMixamoMotionSource | undefined =
         blend: 0.9,
       }
     : undefined;
+const DEMO_PLAYER_POSITION: [number, number, number] = [0, 2.02, 6];
 
 function DemoPhysicsStepper({
   paused,
@@ -112,7 +113,7 @@ function DemoScene() {
                 debug
                 inputRef={touchInputRef}
                 mixamoSource={DEMO_MIXAMO_SOURCE}
-                position={[0, 2.5, 6]}
+                position={DEMO_PLAYER_POSITION}
               />
             ) : (
               <CharacterCtrlrPlayer
@@ -121,7 +122,7 @@ function DemoScene() {
                 inputRef={touchInputRef}
                 manualStepCount={physicsDebug.manualStepCount}
                 paused={physicsDebug.paused}
-                position={[0, 2.5, 6]}
+                position={DEMO_PLAYER_POSITION}
                 timeScale={physicsDebug.timeScale}
               />
             )}
@@ -142,7 +143,7 @@ function DemoScene() {
 
 export default function App() {
   return (
-    <CharacterCtrlrProvider initialState={{ playerPosition: [0, 2.5, 6] }}>
+    <CharacterCtrlrProvider initialState={{ playerPosition: DEMO_PLAYER_POSITION }}>
       <DemoScene />
     </CharacterCtrlrProvider>
   );
