@@ -1,5 +1,9 @@
 import type { CharacterCtrlrSupportState } from "../../types";
-import { GROUNDED_GRACE_PERIOD, GROUNDING_MIN_DURATION } from "./config";
+import {
+  GROUNDED_GRACE_PERIOD,
+  GROUNDING_MIN_DURATION,
+  SUPPORT_CONTACT_CONFIRM_DURATION,
+} from "./config";
 import type { ContactTrackingState, SupportSide } from "./controllerTypes";
 import { deriveSupportState } from "./gait";
 
@@ -142,4 +146,31 @@ export function updateGroundingFromSignal(params: {
   if (!state.rawContactsGrounded) {
     state.supportState = "none";
   }
+}
+
+export function deriveConfirmedSupportState(
+  state: ContactTrackingState,
+  now: number,
+  fallbackSupportState: CharacterCtrlrSupportState,
+) {
+  const leftConfirmed =
+    state.leftSupportContacts.size > 0
+    && (now - state.contactTimestamps.left) / 1000 >= SUPPORT_CONTACT_CONFIRM_DURATION;
+  const rightConfirmed =
+    state.rightSupportContacts.size > 0
+    && (now - state.contactTimestamps.right) / 1000 >= SUPPORT_CONTACT_CONFIRM_DURATION;
+
+  if (leftConfirmed && rightConfirmed) {
+    return "double" as const;
+  }
+
+  if (leftConfirmed) {
+    return "left" as const;
+  }
+
+  if (rightConfirmed) {
+    return "right" as const;
+  }
+
+  return fallbackSupportState;
 }

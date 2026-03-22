@@ -2,10 +2,12 @@ import { MathUtils } from "three";
 import type {
   CharacterCtrlrBalanceState,
   CharacterCtrlrGaitPhase,
+  CharacterCtrlrGaitTransitionReason,
   CharacterCtrlrMovementMode,
   CharacterCtrlrRecoveryState,
   CharacterCtrlrSupportState,
 } from "../../types";
+import { MIN_GAIT_PHASE_HOLD } from "./config";
 import { getGaitConfig } from "./config";
 import type { CharacterCtrlrGaitConfig, GaitState, RecoveryState, SupportSide } from "./controllerTypes";
 
@@ -141,4 +143,91 @@ export function deriveGaitConfigForMode(mode: CharacterCtrlrMovementMode) {
 
 export function flipSupportSide(side: SupportSide): SupportSide {
   return side === "left" ? "right" : "left";
+}
+
+export function advanceGaitState(params: {
+  gaitState: GaitState;
+  grounded: boolean;
+  locomotionCommandActive: boolean;
+  spawnSettleActive: boolean;
+  supportStateForPhase: CharacterCtrlrSupportState;
+  gaitEffort: number;
+  gaitConfig: CharacterCtrlrGaitConfig;
+  jumpTriggered: boolean;
+}) {
+  const {
+    gaitState,
+    grounded,
+    locomotionCommandActive,
+    spawnSettleActive,
+    supportStateForPhase,
+    gaitEffort,
+    gaitConfig,
+    jumpTriggered,
+  } = params;
+  const canTransition = gaitState.phaseElapsed >= MIN_GAIT_PHASE_HOLD;
+  let reason: CharacterCtrlrGaitTransitionReason | null = null;
+  let nextPhase: CharacterCtrlrGaitPhase | null = null;
+
+  if (!grounded || supportStateForPhase === "none") {
+    nextPhase = "airborne";
+    reason = jumpTriggered ? "jump" : "support-lost";
+  } else if (spawnSettleActive) {
+    nextPhase = locomotionCommandActive ? "double-support" : "idle";
+    reason = locomotionCommandActive ? "movement-start" : "idle-no-input";
+  } else if (!locomotionCommandActive) {
+    nextPhase = "idle";
+    reason = "idle-no-input";
+  } else if (gaitState.phase === "idle") {
+    nextPhase = "double-support";
+    reason = "movement-start";
+  } else if (gaitState.phase === "airborne") {
+    nextPhase = "double-support";
+    reason = "landing-support";
+  } else if (
+    gaitState.phase === "double-support"
+    && gaitState.phaseDuration > 0
+    && gaitState.phaseElapsed >= gaitState.phaseDuration
+  ) {
+    const nextStanceSide = flipSupportSide(gaitState.lastStanceSide);
+    nextPhase = nextStanceSide === "left" ? "left-stance" : "right-stance";
+    reason = "double-support-timeout";
+  } else if (
+    canTransition
+    && gaitState.phase === "left-stance"
+    && supportStateForPhase === "double"
+  ) {
+    nextPhase = "double-support";
+    reason = "landing-support";
+  } else if (
+    canTransition
+    && gaitState.phase === "right-stance"
+    && supportStateForPhase === "double"
+  ) {
+    nextPhase = "double-support";
+    reason = "landing-support";
+  } else if (
+    (gaitState.phase === "left-stance" || gaitState.phase === "right-stance")
+    && gaitState.phaseDuration > 0
+    && gaitState.phaseElapsed >= gaitState.phaseDuration
+  ) {
+    nextPhase = "double-support";
+    reason = "stance-timeout";
+  }
+
+  if (nextPhase && reason) {
+    transitionGaitState(
+      gaitState,
+      nextPhase,
+      deriveGaitPhaseDuration(nextPhase, gaitEffort, gaitConfig),
+      reason,
+    );
+    return;
+  }
+
+  gaitState.phaseDuration = deriveGaitPhaseDuration(
+    gaitState.phase,
+    gaitEffort,
+    gaitConfig,
+  );
 }

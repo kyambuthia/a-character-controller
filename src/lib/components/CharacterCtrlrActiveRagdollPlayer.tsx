@@ -47,7 +47,6 @@ import {
   GROUND_PROBE_NORMAL_MIN_Y,
   GROUND_PROBE_ORIGIN_OFFSET,
   GRAVITY,
-  MIN_GAIT_PHASE_HOLD,
   MIXAMO_CONTROL_ENABLED,
   NEUTRAL_ARTICULATED_POSE,
   STAND_ASSIST_MAX_SPEED,
@@ -60,19 +59,19 @@ import {
 import {
   addSupportContact as trackSupportContact,
   createInitialContactTrackingState,
+  deriveConfirmedSupportState,
   removeSupportContact as untrackSupportContact,
   syncSupportState as syncTrackedSupportState,
   updateGroundingFromSignal,
 } from "./active-ragdoll/contactTracking";
 import {
+  advanceGaitState,
   createInitialGaitState,
   createInitialRecoveryState,
   deriveActiveLocomotionMode,
   deriveBalanceState,
   deriveGaitConfigForMode,
   deriveGaitPhaseDuration,
-  flipSupportSide,
-  transitionGaitState,
   transitionRecoveryState,
 } from "./active-ragdoll/gait";
 import { angleDifference, sampleRevoluteJointAngle } from "./active-ragdoll/math";
@@ -570,94 +569,23 @@ export function CharacterCtrlrActiveRagdollPlayer({
       gaitPhaseRef.current += delta * cadence;
     }
 
-    const supportStateForPhase =
+    const supportStateForPhase = deriveConfirmedSupportState(
+      contactState,
+      debugNow,
       spawnSettleActive && supportStateAfterJump !== "none"
         ? "double"
-        : supportStateAfterJump;
-    
-    const canTransition = gaitState.phaseElapsed >= MIN_GAIT_PHASE_HOLD;
-
-    if (!grounded || supportStateForPhase === "none") {
-      transitionGaitState(
-        gaitState,
-        "airborne",
-        deriveGaitPhaseDuration("airborne", gaitEffort, gaitConfig),
-        jumpTriggered ? "jump" : "support-lost",
-      );
-    } else if (spawnSettleActive) {
-      transitionGaitState(
-        gaitState,
-        locomotionCommandActive ? "double-support" : "idle",
-        locomotionCommandActive
-          ? deriveGaitPhaseDuration("double-support", gaitEffort, gaitConfig)
-          : 0,
-        locomotionCommandActive ? "movement-start" : "idle-no-input",
-      );
-    } else if (!locomotionCommandActive && gaitState.phase !== "idle" && canTransition) {
-      transitionGaitState(gaitState, "idle", 0, "idle-no-input");
-    } else if (supportStateForPhase === "left" && gaitState.phase !== "left-stance" && canTransition) {
-      transitionGaitState(
-        gaitState,
-        "left-stance",
-        deriveGaitPhaseDuration("left-stance", gaitEffort, gaitConfig),
-        "left-foot-support",
-      );
-    } else if (supportStateForPhase === "right" && gaitState.phase !== "right-stance" && canTransition) {
-      transitionGaitState(
-        gaitState,
-        "right-stance",
-        deriveGaitPhaseDuration("right-stance", gaitEffort, gaitConfig),
-        "right-foot-support",
-      );
-    } else if (gaitState.phase === "airborne") {
-      transitionGaitState(
-        gaitState,
-        "double-support",
-        deriveGaitPhaseDuration("double-support", gaitEffort, gaitConfig),
-        "landing-support",
-      );
-    } else if (gaitState.phase === "idle") {
-      transitionGaitState(
-        gaitState,
-        "double-support",
-        deriveGaitPhaseDuration("double-support", gaitEffort, gaitConfig),
-        "movement-start",
-      );
-    } else if (
-      gaitState.phase === "double-support"
-      && gaitState.phaseDuration > 0
-      && gaitState.phaseElapsed >= gaitState.phaseDuration
-    ) {
-      const nextStanceSide = flipSupportSide(gaitState.lastStanceSide);
-      transitionGaitState(
-        gaitState,
-        nextStanceSide === "left" ? "left-stance" : "right-stance",
-        deriveGaitPhaseDuration(
-          nextStanceSide === "left" ? "left-stance" : "right-stance",
-          gaitEffort,
-          gaitConfig,
-        ),
-        "double-support-timeout",
-      );
-    } else if (
-      (gaitState.phase === "left-stance" || gaitState.phase === "right-stance")
-      && gaitState.phaseDuration > 0
-      && gaitState.phaseElapsed >= gaitState.phaseDuration
-      && supportStateForPhase === "double"
-    ) {
-      transitionGaitState(
-        gaitState,
-        "double-support",
-        deriveGaitPhaseDuration("double-support", gaitEffort, gaitConfig),
-        "stance-timeout",
-      );
-    } else {
-      gaitState.phaseDuration = deriveGaitPhaseDuration(
-        gaitState.phase,
-        gaitEffort,
-        gaitConfig,
-      );
-    }
+        : supportStateAfterJump,
+    );
+    advanceGaitState({
+      gaitState,
+      grounded,
+      locomotionCommandActive,
+      spawnSettleActive,
+      supportStateForPhase,
+      gaitEffort,
+      gaitConfig,
+      jumpTriggered,
+    });
     const gaitPhaseValue = gaitState.phaseDuration > 0
       ? Math.min(1, gaitState.phaseElapsed / gaitState.phaseDuration)
       : 0;
