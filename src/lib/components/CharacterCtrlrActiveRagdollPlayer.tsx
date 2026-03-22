@@ -18,8 +18,6 @@ import { useCharacterCtrlrKeyboardInput } from "../useCharacterCtrlrKeyboardInpu
 import {
   DEFAULT_CHARACTER_CTRLR_INPUT,
   type CharacterCtrlrBalanceState,
-  type CharacterCtrlrGaitPhase,
-  type CharacterCtrlrGaitTransitionReason,
   type CharacterCtrlrMixamoMotionSource,
   mergeCharacterCtrlrInput,
   type CharacterCtrlrInputState,
@@ -43,6 +41,56 @@ import {
   CharacterCtrlrMixamoMotionDriver,
   type CharacterCtrlrMixamoPoseTargets,
 } from "./CharacterCtrlrMixamoMotionDriver";
+import {
+  FOOT_SUPPORT_OFFSET,
+  GROUND_PROBE_MAX_DISTANCE,
+  GROUND_PROBE_NORMAL_MIN_Y,
+  GROUND_PROBE_ORIGIN_OFFSET,
+  GRAVITY,
+  MIN_GAIT_PHASE_HOLD,
+  MIXAMO_CONTROL_ENABLED,
+  NEUTRAL_ARTICULATED_POSE,
+  STAND_ASSIST_MAX_SPEED,
+  STAND_BOOTSTRAP_SETTLE_DURATION,
+  STAND_FOOT_FORWARD_OFFSET,
+  STAND_FOOT_LATERAL_OFFSET,
+  STAND_PELVIS_HEIGHT,
+  STAND_SEGMENT_MAX_TORQUE,
+} from "./active-ragdoll/config";
+import {
+  addSupportContact as trackSupportContact,
+  createInitialContactTrackingState,
+  removeSupportContact as untrackSupportContact,
+  syncSupportState as syncTrackedSupportState,
+  updateGroundingFromSignal,
+} from "./active-ragdoll/contactTracking";
+import {
+  createInitialGaitState,
+  createInitialRecoveryState,
+  deriveActiveLocomotionMode,
+  deriveBalanceState,
+  deriveGaitConfigForMode,
+  deriveGaitPhaseDuration,
+  flipSupportSide,
+  transitionGaitState,
+  transitionRecoveryState,
+} from "./active-ragdoll/gait";
+import { angleDifference, sampleRevoluteJointAngle } from "./active-ragdoll/math";
+import { driveJointToPosition, resolveJointTarget } from "./active-ragdoll/motors";
+import {
+  applyRecoveryPoseTargets,
+  applyStandingPoseTargets,
+  blendPhasePoseTargets,
+  derivePhasePoseTargets,
+} from "./active-ragdoll/poseTargets";
+import type {
+  ContactTrackingState,
+  GaitState,
+  RecoveryState,
+  RevoluteJointPoseMap,
+  StandingFootPlant,
+  SupportSide,
+} from "./active-ragdoll/controllerTypes";
 
 const forward = new Vector3();
 const right = new Vector3();
@@ -73,379 +121,6 @@ const footQuaternion = new Quaternion();
 const footEuler = new Euler(0, 0, 0, "YXZ");
 const segmentQuaternion = new Quaternion();
 const segmentEuler = new Euler(0, 0, 0, "YXZ");
-const jointParentQuaternion = new Quaternion();
-const jointChildQuaternion = new Quaternion();
-const jointRelativeQuaternion = new Quaternion();
-const jointRelativeEuler = new Euler(0, 0, 0, "XYZ");
-
-const GRAVITY = 9.81;
-const FOOT_SUPPORT_OFFSET = 0.08;
-const STAND_PELVIS_HEIGHT = 1.9;
-const STAND_ASSIST_MAX_SPEED = 0.42;
-const STAND_FOOT_LATERAL_OFFSET = 0.18;
-const STAND_FOOT_FORWARD_OFFSET = 0.12;
-const STAND_SEGMENT_MAX_TORQUE = 0.6;
-const STAND_HIP_TARGET = -0.08;
-const STAND_KNEE_TARGET = -0.22;
-const STAND_ANKLE_TARGET = 0.08;
-const NEUTRAL_SHOULDER_TARGET = 0.1;
-const NEUTRAL_ELBOW_TARGET = -0.34;
-const NEUTRAL_WRIST_TARGET = 0;
-const GROUNDED_GRACE_PERIOD = 0.08;
-const GROUNDING_MIN_DURATION = 0.03;
-const GROUND_PROBE_ORIGIN_OFFSET = 0.06;
-const GROUND_PROBE_MAX_DISTANCE = 0.26;
-const GROUND_PROBE_NORMAL_MIN_Y = 0.35;
-const STAND_BOOTSTRAP_SETTLE_DURATION = 0.25;
-const MIXAMO_CONTROL_ENABLED = false;
-const REVOLUTE_JOINT_LIMITS = Object.fromEntries(
-  CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS.map((definition) => [
-    definition.key,
-    definition.limits,
-  ]),
-) as Record<CharacterCtrlrHumanoidRevoluteJointKey, [number, number]>;
-const NEUTRAL_ARTICULATED_POSE: Record<
-  CharacterCtrlrHumanoidRevoluteJointKey,
-  number
-> = {
-  shoulderLeft: NEUTRAL_SHOULDER_TARGET,
-  shoulderRight: NEUTRAL_SHOULDER_TARGET,
-  hipLeft: STAND_HIP_TARGET,
-  hipRight: STAND_HIP_TARGET,
-  elbowLeft: NEUTRAL_ELBOW_TARGET,
-  wristLeft: NEUTRAL_WRIST_TARGET,
-  elbowRight: NEUTRAL_ELBOW_TARGET,
-  wristRight: NEUTRAL_WRIST_TARGET,
-  kneeLeft: STAND_KNEE_TARGET,
-  ankleLeft: STAND_ANKLE_TARGET,
-  kneeRight: STAND_KNEE_TARGET,
-  ankleRight: STAND_ANKLE_TARGET,
-};
-
-type SupportSide = "left" | "right";
-
-type StandingFootPlant = {
-  left: CharacterCtrlrVec3;
-  right: CharacterCtrlrVec3;
-};
-
-type PhaseLimbPoseTargets = {
-  hip: number;
-  knee: number;
-  ankle: number;
-  shoulder: number;
-  elbow: number;
-  wrist: number;
-};
-
-type PhasePoseTargets = {
-  pelvisPitch: number;
-  pelvisRoll: number;
-  chestPitch: number;
-  chestRoll: number;
-  left: PhaseLimbPoseTargets;
-  right: PhaseLimbPoseTargets;
-};
-
-type CharacterCtrlrGaitConfig = {
-  commandEffort: number;
-  postureAmount: number;
-  cadenceRange: [number, number];
-  phaseDurations: {
-    doubleSupport: [number, number];
-    stance: [number, number];
-    airborne: number;
-  };
-  step: {
-    length: [number, number];
-    width: [number, number];
-    height: [number, number];
-    pelvisLeadScale: [number, number];
-    pelvisHeight: [number, number];
-  };
-  support: {
-    centering: {
-      double: number;
-      single: number;
-    };
-    forwarding: {
-      double: [number, number];
-      single: [number, number];
-    };
-    captureFeedback: {
-      lateral: [number, number];
-      forward: [number, number];
-      swingLateral: [number, number];
-      swingForward: [number, number];
-    };
-    phaseCompression: number;
-  };
-  swing: {
-    placement: {
-      double: [number, number];
-      single: [number, number];
-    };
-    drive: [number, number];
-    heightDrive: [number, number];
-  };
-  pose: {
-    baseHip: [number, number];
-    baseKnee: [number, number];
-    baseAnkle: [number, number];
-    baseShoulder: [number, number];
-    baseElbow: [number, number];
-    pelvisPitch: [number, number];
-    chestPitch: [number, number];
-    doubleSupportCompression: [number, number];
-    doubleSupportArmCounter: [number, number];
-    swingReach: [number, number];
-    stanceDrive: [number, number];
-    pelvisLean: [number, number];
-    pelvisRoll: [number, number];
-    shoulderDrive: [number, number];
-    elbowDrive: [number, number];
-    swingKnee: [number, number];
-    swingAnkle: [number, number];
-  };
-};
-
-const GAIT_CONFIGS: Record<
-  "idle" | "walk" | "run" | "crouch",
-  CharacterCtrlrGaitConfig
-> = {
-  idle: {
-    commandEffort: 0,
-    postureAmount: 0,
-    cadenceRange: [0, 0],
-    phaseDurations: {
-      doubleSupport: [0.22, 0.22],
-      stance: [0.46, 0.46],
-      airborne: 0.12,
-    },
-    step: {
-      length: [0, 0],
-      width: [0.2, 0.2],
-      height: [0.02, 0.02],
-      pelvisLeadScale: [0, 0],
-      pelvisHeight: [1.72, 1.72],
-    },
-    support: {
-      centering: { double: 3.2, single: 5.4 },
-      forwarding: {
-        double: [1.6, 1.6],
-        single: [3.1, 3.1],
-      },
-      captureFeedback: {
-        lateral: [0.45, 0.45],
-        forward: [0.5, 0.5],
-        swingLateral: [0.22, 0.22],
-        swingForward: [0.35, 0.35],
-      },
-      phaseCompression: 0.72,
-    },
-    swing: {
-      placement: {
-        double: [4.8, 4.8],
-        single: [3.8, 3.8],
-      },
-      drive: [0.38, 0.38],
-      heightDrive: [12, 12],
-    },
-    pose: {
-      baseHip: [0, 0],
-      baseKnee: [0, 0],
-      baseAnkle: [0.02, 0.02],
-      baseShoulder: [0.1, 0.1],
-      baseElbow: [-0.34, -0.34],
-      pelvisPitch: [0, 0],
-      chestPitch: [0.02, 0.02],
-      doubleSupportCompression: [0.01, 0.01],
-      doubleSupportArmCounter: [0.04, 0.04],
-      swingReach: [-0.04, 0.08],
-      stanceDrive: [0.02, 0.02],
-      pelvisLean: [0.01, 0.01],
-      pelvisRoll: [0.01, 0.01],
-      shoulderDrive: [0.16, 0.16],
-      elbowDrive: [0.04, 0.04],
-      swingKnee: [0.06, 0.06],
-      swingAnkle: [0.02, 0.02],
-    },
-  },
-  walk: {
-    commandEffort: 0.6,
-    postureAmount: 0,
-    cadenceRange: [2.8, 5.2],
-    phaseDurations: {
-      doubleSupport: [0.22, 0.12],
-      stance: [0.46, 0.28],
-      airborne: 0.12,
-    },
-    step: {
-      length: [0.22, 0.54],
-      width: [0.2, 0.24],
-      height: [0.08, 0.2],
-      pelvisLeadScale: [0.32, 0.44],
-      pelvisHeight: [1.34, 1.08],
-    },
-    support: {
-      centering: { double: 3.2, single: 5.4 },
-      forwarding: {
-        double: [1.6, 2.6],
-        single: [3.1, 4.4],
-      },
-      captureFeedback: {
-        lateral: [0.45, 0.8],
-        forward: [0.5, 0.92],
-        swingLateral: [0.22, 0.42],
-        swingForward: [0.35, 0.65],
-      },
-      phaseCompression: 0.72,
-    },
-    swing: {
-      placement: {
-        double: [4.8, 7.4],
-        single: [3.8, 5.8],
-      },
-      drive: [0.38, 0.62],
-      heightDrive: [12, 18],
-    },
-    pose: {
-      baseHip: [0.02, -0.22],
-      baseKnee: [-0.08, -0.68],
-      baseAnkle: [0.08, -0.08],
-      baseShoulder: [0.1, 0.2],
-      baseElbow: [-0.34, -0.48],
-      pelvisPitch: [-0.01, -0.08],
-      chestPitch: [0.03, 0.14],
-      doubleSupportCompression: [0.04, 0.14],
-      doubleSupportArmCounter: [0.04, 0.12],
-      swingReach: [-0.12, 0.34],
-      stanceDrive: [0.08, 0.18],
-      pelvisLean: [0.03, 0.11],
-      pelvisRoll: [0.03, 0.09],
-      shoulderDrive: [0.16, 0.4],
-      elbowDrive: [0.04, 0.18],
-      swingKnee: [0.18, 0.48],
-      swingAnkle: [0.08, 0.22],
-    },
-  },
-  run: {
-    commandEffort: 0.94,
-    postureAmount: 0.12,
-    cadenceRange: [4.6, 6.8],
-    phaseDurations: {
-      doubleSupport: [0.16, 0.08],
-      stance: [0.34, 0.2],
-      airborne: 0.14,
-    },
-    step: {
-      length: [0.34, 0.72],
-      width: [0.16, 0.18],
-      height: [0.12, 0.26],
-      pelvisLeadScale: [0.38, 0.52],
-      pelvisHeight: [1.32, 1.06],
-    },
-    support: {
-      centering: { double: 3.5, single: 5.8 },
-      forwarding: {
-        double: [2.1, 3.2],
-        single: [3.8, 5.1],
-      },
-      captureFeedback: {
-        lateral: [0.55, 0.95],
-        forward: [0.62, 1.1],
-        swingLateral: [0.28, 0.48],
-        swingForward: [0.45, 0.82],
-      },
-      phaseCompression: 0.66,
-    },
-    swing: {
-      placement: {
-        double: [5.8, 8.8],
-        single: [4.4, 6.8],
-      },
-      drive: [0.52, 0.82],
-      heightDrive: [14, 22],
-    },
-    pose: {
-      baseHip: [0, -0.18],
-      baseKnee: [-0.12, -0.42],
-      baseAnkle: [0.04, -0.06],
-      baseShoulder: [0.12, 0.18],
-      baseElbow: [-0.32, -0.46],
-      pelvisPitch: [-0.03, -0.1],
-      chestPitch: [0.04, 0.16],
-      doubleSupportCompression: [0.06, 0.12],
-      doubleSupportArmCounter: [0.08, 0.18],
-      swingReach: [-0.08, 0.48],
-      stanceDrive: [0.12, 0.24],
-      pelvisLean: [0.06, 0.14],
-      pelvisRoll: [0.04, 0.1],
-      shoulderDrive: [0.28, 0.56],
-      elbowDrive: [0.08, 0.22],
-      swingKnee: [0.28, 0.58],
-      swingAnkle: [0.14, 0.26],
-    },
-  },
-  crouch: {
-    commandEffort: 0.32,
-    postureAmount: 1,
-    cadenceRange: [2.1, 4],
-    phaseDurations: {
-      doubleSupport: [0.26, 0.16],
-      stance: [0.52, 0.34],
-      airborne: 0.12,
-    },
-    step: {
-      length: [0.12, 0.28],
-      width: [0.24, 0.28],
-      height: [0.06, 0.14],
-      pelvisLeadScale: [0.24, 0.34],
-      pelvisHeight: [1.16, 1.02],
-    },
-    support: {
-      centering: { double: 3.6, single: 5.9 },
-      forwarding: {
-        double: [1.4, 2.1],
-        single: [2.6, 3.6],
-      },
-      captureFeedback: {
-        lateral: [0.38, 0.66],
-        forward: [0.42, 0.74],
-        swingLateral: [0.18, 0.3],
-        swingForward: [0.24, 0.46],
-      },
-      phaseCompression: 0.78,
-    },
-    swing: {
-      placement: {
-        double: [4.4, 6.2],
-        single: [3.4, 4.8],
-      },
-      drive: [0.28, 0.5],
-      heightDrive: [10, 14],
-    },
-    pose: {
-      baseHip: [0.02, -0.22],
-      baseKnee: [-0.08, -0.68],
-      baseAnkle: [0.08, -0.08],
-      baseShoulder: [0.1, 0.2],
-      baseElbow: [-0.34, -0.48],
-      pelvisPitch: [-0.01, -0.08],
-      chestPitch: [0.03, 0.14],
-      doubleSupportCompression: [0.06, 0.18],
-      doubleSupportArmCounter: [0.02, 0.08],
-      swingReach: [-0.08, 0.18],
-      stanceDrive: [0.12, 0.22],
-      pelvisLean: [0.02, 0.08],
-      pelvisRoll: [0.02, 0.06],
-      shoulderDrive: [0.08, 0.22],
-      elbowDrive: [0.03, 0.12],
-      swingKnee: [0.24, 0.54],
-      swingAnkle: [0.1, 0.18],
-    },
-  },
-};
 
 export type CharacterCtrlrActiveRagdollPlayerProps = {
   position?: CharacterCtrlrVec3;
@@ -476,511 +151,6 @@ export type CharacterCtrlrActiveRagdollPlayerProps = {
   onLand?: (snapshot: CharacterCtrlrPlayerSnapshot) => void;
 };
 
-function angleDifference(current: number, target: number) {
-  return Math.atan2(
-    Math.sin(target - current),
-    Math.cos(target - current),
-  );
-}
-
-function deriveSupportState(
-  leftContactCount: number,
-  rightContactCount: number,
-): CharacterCtrlrSupportState {
-  if (leftContactCount > 0 && rightContactCount > 0) {
-    return "double";
-  }
-
-  if (leftContactCount > 0) {
-    return "left";
-  }
-
-  if (rightContactCount > 0) {
-    return "right";
-  }
-
-  return "none";
-}
-
-function driveJointToPosition(
-  joint: RevoluteImpulseJoint | null,
-  targetPosition: number,
-  stiffness: number,
-  damping: number,
-) {
-  if (!joint?.isValid()) {
-    return;
-  }
-
-  joint.configureMotorPosition(targetPosition, stiffness, damping);
-}
-
-function sampleRevoluteJointAngle(
-  bodyA: RapierRigidBody,
-  bodyB: RapierRigidBody,
-) {
-  const parentRotation = bodyA.rotation();
-  const childRotation = bodyB.rotation();
-
-  jointParentQuaternion.set(
-    parentRotation.x,
-    parentRotation.y,
-    parentRotation.z,
-    parentRotation.w,
-  );
-  jointChildQuaternion.set(
-    childRotation.x,
-    childRotation.y,
-    childRotation.z,
-    childRotation.w,
-  );
-  jointRelativeQuaternion.copy(jointParentQuaternion).invert().multiply(jointChildQuaternion);
-  jointRelativeEuler.setFromQuaternion(jointRelativeQuaternion, "XYZ");
-
-  return jointRelativeEuler.x;
-}
-
-function getGaitConfig(
-  locomotionMode: CharacterCtrlrMovementMode,
-): CharacterCtrlrGaitConfig {
-  switch (locomotionMode) {
-    case "run":
-      return GAIT_CONFIGS.run;
-    case "walk":
-      return GAIT_CONFIGS.walk;
-    case "crouch":
-      return GAIT_CONFIGS.crouch;
-    case "idle":
-    case "jump":
-    case "fall":
-    default:
-      return GAIT_CONFIGS.idle;
-  }
-}
-
-function deriveGaitPhaseDuration(
-  gaitPhase: CharacterCtrlrGaitPhase,
-  gaitEffort: number,
-  gaitConfig: CharacterCtrlrGaitConfig,
-) {
-  switch (gaitPhase) {
-    case "double-support":
-      return MathUtils.lerp(
-        gaitConfig.phaseDurations.doubleSupport[0],
-        gaitConfig.phaseDurations.doubleSupport[1],
-        gaitEffort,
-      );
-    case "left-stance":
-    case "right-stance":
-      return MathUtils.lerp(
-        gaitConfig.phaseDurations.stance[0],
-        gaitConfig.phaseDurations.stance[1],
-        gaitEffort,
-      );
-    case "airborne":
-      return gaitConfig.phaseDurations.airborne;
-    case "idle":
-    default:
-      return 0;
-  }
-}
-
-function deriveBalanceState(
-  grounded: boolean,
-  supportState: CharacterCtrlrSupportState,
-  supportLateralError: number,
-  supportForwardError: number,
-  supportHeightError: number,
-): CharacterCtrlrBalanceState {
-  if (!grounded || supportState === "none") {
-    return "unsupported";
-  }
-
-  const supportError = Math.max(
-    Math.abs(supportLateralError),
-    Math.abs(supportForwardError),
-    Math.abs(supportHeightError),
-  );
-
-  return supportError > 0.22 ? "recovering" : "balanced";
-}
-
-function buildBaseLimbPoseTargets(
-  grounded: boolean,
-  gaitConfig: CharacterCtrlrGaitConfig,
-) {
-  const postureAmount = gaitConfig.postureAmount;
-  const hip = grounded
-    ? MathUtils.lerp(gaitConfig.pose.baseHip[0], gaitConfig.pose.baseHip[1], postureAmount)
-    : -0.08;
-  const knee = MathUtils.lerp(
-    gaitConfig.pose.baseKnee[0],
-    gaitConfig.pose.baseKnee[1],
-    postureAmount,
-  );
-  const ankle = MathUtils.lerp(
-    gaitConfig.pose.baseAnkle[0],
-    gaitConfig.pose.baseAnkle[1],
-    postureAmount,
-  );
-  const shoulder = grounded
-    ? MathUtils.lerp(
-        gaitConfig.pose.baseShoulder[0],
-        gaitConfig.pose.baseShoulder[1],
-        postureAmount,
-      )
-    : 0.16;
-  const elbow = grounded
-    ? MathUtils.lerp(
-        gaitConfig.pose.baseElbow[0],
-        gaitConfig.pose.baseElbow[1],
-        postureAmount,
-      )
-    : -0.42;
-  const wrist = grounded ? 0 : -0.05;
-
-  return { hip, knee, ankle, shoulder, elbow, wrist };
-}
-
-function derivePhasePoseTargets(params: {
-  gaitPhase: CharacterCtrlrGaitPhase;
-  gaitPhaseValue: number;
-  gaitEffort: number;
-  gaitConfig: CharacterCtrlrGaitConfig;
-  grounded: boolean;
-}): PhasePoseTargets {
-  const {
-    gaitPhase,
-    gaitPhaseValue,
-    gaitEffort,
-    gaitConfig,
-    grounded,
-  } = params;
-  const base = buildBaseLimbPoseTargets(grounded, gaitConfig);
-  const targets: PhasePoseTargets = {
-    pelvisPitch: grounded
-      ? MathUtils.lerp(
-          gaitConfig.pose.pelvisPitch[0],
-          gaitConfig.pose.pelvisPitch[1],
-          gaitConfig.postureAmount,
-        )
-      : -0.06,
-    pelvisRoll: 0,
-    chestPitch: grounded
-      ? MathUtils.lerp(
-          gaitConfig.pose.chestPitch[0],
-          gaitConfig.pose.chestPitch[1],
-          gaitConfig.postureAmount,
-        )
-      : 0.08,
-    chestRoll: 0,
-    left: { ...base },
-    right: { ...base },
-  };
-
-  if (!grounded || gaitPhase === "airborne") {
-    targets.left.hip = -0.12;
-    targets.right.hip = -0.12;
-    targets.left.knee = -0.52;
-    targets.right.knee = -0.52;
-    targets.left.ankle = -0.12;
-    targets.right.ankle = -0.12;
-    targets.left.shoulder = 0.22;
-    targets.right.shoulder = 0.22;
-    return targets;
-  }
-
-  if (gaitPhase === "idle") {
-    return targets;
-  }
-
-  if (gaitPhase === "double-support") {
-    const supportCompression = MathUtils.lerp(
-      gaitConfig.pose.doubleSupportCompression[0],
-      gaitConfig.pose.doubleSupportCompression[1],
-      gaitEffort,
-    );
-    const armCounter = MathUtils.lerp(
-      gaitConfig.pose.doubleSupportArmCounter[0],
-      gaitConfig.pose.doubleSupportArmCounter[1],
-      gaitEffort,
-    )
-      * Math.sin(gaitPhaseValue * Math.PI);
-    targets.pelvisPitch -= supportCompression * 0.45;
-    targets.chestPitch += supportCompression * 0.3;
-    targets.left.hip -= supportCompression;
-    targets.right.hip -= supportCompression;
-    targets.left.knee -= supportCompression * 0.55;
-    targets.right.knee -= supportCompression * 0.55;
-    targets.left.ankle += supportCompression * 0.4;
-    targets.right.ankle += supportCompression * 0.4;
-    targets.left.shoulder += armCounter;
-    targets.right.shoulder -= armCounter;
-    targets.left.elbow += armCounter * 0.35;
-    targets.right.elbow -= armCounter * 0.35;
-    return targets;
-  }
-
-  const stanceSide: SupportSide =
-    gaitPhase === "left-stance" ? "left" : "right";
-  const swingSide: SupportSide = stanceSide === "left" ? "right" : "left";
-  const swingLift = Math.sin(gaitPhaseValue * Math.PI);
-  const swingReach = MathUtils.lerp(
-    gaitConfig.pose.swingReach[0],
-    gaitConfig.pose.swingReach[1],
-    gaitPhaseValue,
-  ) * gaitEffort;
-  const stanceDrive = MathUtils.lerp(
-    gaitConfig.pose.stanceDrive[0],
-    gaitConfig.pose.stanceDrive[1],
-    gaitEffort,
-  );
-  const pelvisLean = MathUtils.lerp(
-    gaitConfig.pose.pelvisLean[0],
-    gaitConfig.pose.pelvisLean[1],
-    gaitEffort,
-  );
-  const pelvisRoll = (stanceSide === "left" ? -1 : 1)
-    * MathUtils.lerp(
-      gaitConfig.pose.pelvisRoll[0],
-      gaitConfig.pose.pelvisRoll[1],
-      gaitEffort,
-    );
-  const shoulderDrive = MathUtils.lerp(
-    gaitConfig.pose.shoulderDrive[0],
-    gaitConfig.pose.shoulderDrive[1],
-    gaitEffort,
-  );
-  const elbowDrive = MathUtils.lerp(
-    gaitConfig.pose.elbowDrive[0],
-    gaitConfig.pose.elbowDrive[1],
-    gaitEffort,
-  ) * swingLift;
-
-  targets.pelvisPitch -= pelvisLean;
-  targets.pelvisRoll = pelvisRoll;
-  targets.chestPitch += pelvisLean * 0.7;
-  targets.chestRoll = -pelvisRoll * 0.6;
-
-  targets[stanceSide].hip -= stanceDrive;
-  targets[stanceSide].knee -= stanceDrive * 0.5;
-  targets[stanceSide].ankle += stanceDrive * 0.42;
-
-  targets[swingSide].hip += swingReach;
-  targets[swingSide].knee -= MathUtils.lerp(
-    gaitConfig.pose.swingKnee[0],
-    gaitConfig.pose.swingKnee[1],
-    gaitEffort,
-  ) * swingLift;
-  targets[swingSide].ankle -= MathUtils.lerp(
-    gaitConfig.pose.swingAnkle[0],
-    gaitConfig.pose.swingAnkle[1],
-    gaitEffort,
-  ) * swingLift;
-
-  targets[stanceSide].shoulder += shoulderDrive;
-  targets[swingSide].shoulder -= shoulderDrive;
-  targets[stanceSide].elbow += elbowDrive * 0.7;
-  targets[swingSide].elbow -= elbowDrive;
-
-  return targets;
-}
-
-type GaitState = {
-  phase: CharacterCtrlrGaitPhase;
-  phaseElapsed: number;
-  phaseDuration: number;
-  transitionReason: CharacterCtrlrGaitTransitionReason;
-  transitionCount: number;
-  lastStanceSide: SupportSide;
-};
-
-type RecoveryState = {
-  mode: CharacterCtrlrRecoveryState;
-  elapsed: number;
-};
-
-function transitionGaitState(
-  gaitState: GaitState,
-  nextPhase: CharacterCtrlrGaitPhase,
-  nextDuration: number,
-  reason: CharacterCtrlrGaitTransitionReason,
-) {
-  if (gaitState.phase !== nextPhase) {
-    gaitState.phase = nextPhase;
-    gaitState.phaseElapsed = 0;
-    gaitState.transitionReason = reason;
-    gaitState.transitionCount += 1;
-  }
-
-  gaitState.phaseDuration = nextDuration;
-
-  if (nextPhase === "left-stance") {
-    gaitState.lastStanceSide = "left";
-  } else if (nextPhase === "right-stance") {
-    gaitState.lastStanceSide = "right";
-  }
-}
-
-function transitionRecoveryState(
-  recoveryState: RecoveryState,
-  nextMode: CharacterCtrlrRecoveryState,
-) {
-  if (recoveryState.mode !== nextMode) {
-    recoveryState.mode = nextMode;
-    recoveryState.elapsed = 0;
-    return;
-  }
-
-  recoveryState.elapsed = Math.max(0, recoveryState.elapsed);
-}
-
-function applyRecoveryPoseTargets(
-  targets: PhasePoseTargets,
-  recoveryState: CharacterCtrlrRecoveryState,
-  recoveryProgress: number,
-) {
-  if (recoveryState === "stable" || recoveryState === "jumping") {
-    return targets;
-  }
-
-  const adjustedTargets: PhasePoseTargets = {
-    pelvisPitch: targets.pelvisPitch,
-    pelvisRoll: targets.pelvisRoll,
-    chestPitch: targets.chestPitch,
-    chestRoll: targets.chestRoll,
-    left: { ...targets.left },
-    right: { ...targets.right },
-  };
-
-  switch (recoveryState) {
-    case "stumbling": {
-      const stumbleAmount = MathUtils.lerp(0.08, 0.18, recoveryProgress);
-      adjustedTargets.pelvisPitch -= stumbleAmount;
-      adjustedTargets.chestPitch += stumbleAmount * 0.6;
-      adjustedTargets.left.knee -= stumbleAmount * 0.9;
-      adjustedTargets.right.knee -= stumbleAmount * 0.9;
-      adjustedTargets.left.ankle += stumbleAmount * 0.35;
-      adjustedTargets.right.ankle += stumbleAmount * 0.35;
-      adjustedTargets.left.shoulder += stumbleAmount * 0.8;
-      adjustedTargets.right.shoulder += stumbleAmount * 0.8;
-      adjustedTargets.left.elbow -= stumbleAmount * 0.7;
-      adjustedTargets.right.elbow -= stumbleAmount * 0.7;
-      break;
-    }
-    case "landing": {
-      const landingCompression = MathUtils.lerp(0.12, 0.02, recoveryProgress);
-      adjustedTargets.pelvisPitch -= landingCompression * 0.18;
-      adjustedTargets.chestPitch += landingCompression * 0.12;
-      adjustedTargets.left.hip -= landingCompression * 0.12;
-      adjustedTargets.right.hip -= landingCompression * 0.12;
-      adjustedTargets.left.knee -= landingCompression * 0.35;
-      adjustedTargets.right.knee -= landingCompression * 0.35;
-      adjustedTargets.left.ankle += landingCompression * 0.08;
-      adjustedTargets.right.ankle += landingCompression * 0.08;
-      break;
-    }
-    case "fallen": {
-      adjustedTargets.pelvisPitch = -0.24;
-      adjustedTargets.pelvisRoll = 0;
-      adjustedTargets.chestPitch = 0.28;
-      adjustedTargets.chestRoll = 0;
-      adjustedTargets.left.hip = -0.34;
-      adjustedTargets.right.hip = -0.34;
-      adjustedTargets.left.knee = -1.02;
-      adjustedTargets.right.knee = -1.02;
-      adjustedTargets.left.ankle = -0.18;
-      adjustedTargets.right.ankle = -0.18;
-      adjustedTargets.left.shoulder = 0.26;
-      adjustedTargets.right.shoulder = 0.26;
-      adjustedTargets.left.elbow = -0.72;
-      adjustedTargets.right.elbow = -0.72;
-      adjustedTargets.left.wrist = -0.12;
-      adjustedTargets.right.wrist = -0.12;
-      break;
-    }
-    case "recovering": {
-      const standBlend = MathUtils.clamp(recoveryProgress, 0, 1);
-      adjustedTargets.pelvisPitch = MathUtils.lerp(-0.2, -0.08, standBlend);
-      adjustedTargets.pelvisRoll *= 0.4;
-      adjustedTargets.chestPitch = MathUtils.lerp(0.26, 0.12, standBlend);
-      adjustedTargets.chestRoll *= 0.4;
-      adjustedTargets.left.hip = MathUtils.lerp(-0.28, adjustedTargets.left.hip, standBlend);
-      adjustedTargets.right.hip = MathUtils.lerp(-0.28, adjustedTargets.right.hip, standBlend);
-      adjustedTargets.left.knee = MathUtils.lerp(-0.9, adjustedTargets.left.knee, standBlend);
-      adjustedTargets.right.knee = MathUtils.lerp(-0.9, adjustedTargets.right.knee, standBlend);
-      adjustedTargets.left.ankle = MathUtils.lerp(0.12, adjustedTargets.left.ankle, standBlend);
-      adjustedTargets.right.ankle = MathUtils.lerp(0.12, adjustedTargets.right.ankle, standBlend);
-      adjustedTargets.left.shoulder = MathUtils.lerp(0.18, adjustedTargets.left.shoulder, standBlend);
-      adjustedTargets.right.shoulder = MathUtils.lerp(0.18, adjustedTargets.right.shoulder, standBlend);
-      adjustedTargets.left.elbow = MathUtils.lerp(-0.46, adjustedTargets.left.elbow, standBlend);
-      adjustedTargets.right.elbow = MathUtils.lerp(-0.46, adjustedTargets.right.elbow, standBlend);
-      break;
-    }
-    default:
-      break;
-  }
-
-  return adjustedTargets;
-}
-
-function applyStandingPoseTargets(targets: PhasePoseTargets) {
-  return {
-    pelvisPitch: 0.01,
-    pelvisRoll: 0,
-    chestPitch: 0.02,
-    chestRoll: 0,
-    left: {
-      ...targets.left,
-      hip: NEUTRAL_ARTICULATED_POSE.hipLeft,
-      knee: NEUTRAL_ARTICULATED_POSE.kneeLeft,
-      ankle: NEUTRAL_ARTICULATED_POSE.ankleLeft,
-      shoulder: NEUTRAL_ARTICULATED_POSE.shoulderLeft,
-      elbow: NEUTRAL_ARTICULATED_POSE.elbowLeft,
-      wrist: NEUTRAL_ARTICULATED_POSE.wristLeft,
-    },
-    right: {
-      ...targets.right,
-      hip: NEUTRAL_ARTICULATED_POSE.hipRight,
-      knee: NEUTRAL_ARTICULATED_POSE.kneeRight,
-      ankle: NEUTRAL_ARTICULATED_POSE.ankleRight,
-      shoulder: NEUTRAL_ARTICULATED_POSE.shoulderRight,
-      elbow: NEUTRAL_ARTICULATED_POSE.elbowRight,
-      wrist: NEUTRAL_ARTICULATED_POSE.wristRight,
-    },
-  } satisfies PhasePoseTargets;
-}
-
-function blendPhasePoseTargets(
-  baseTargets: PhasePoseTargets,
-  targetTargets: CharacterCtrlrMixamoPoseTargets,
-  blend: number,
-) {
-  const weight = MathUtils.clamp(blend, 0, 1);
-
-  return {
-    pelvisPitch: MathUtils.lerp(baseTargets.pelvisPitch, targetTargets.pelvisPitch, weight),
-    pelvisRoll: MathUtils.lerp(baseTargets.pelvisRoll, targetTargets.pelvisRoll, weight),
-    chestPitch: MathUtils.lerp(baseTargets.chestPitch, targetTargets.chestPitch, weight),
-    chestRoll: MathUtils.lerp(baseTargets.chestRoll, targetTargets.chestRoll, weight),
-    left: {
-      hip: MathUtils.lerp(baseTargets.left.hip, targetTargets.left.hip, weight),
-      knee: MathUtils.lerp(baseTargets.left.knee, targetTargets.left.knee, weight),
-      ankle: MathUtils.lerp(baseTargets.left.ankle, targetTargets.left.ankle, weight),
-      shoulder: MathUtils.lerp(baseTargets.left.shoulder, targetTargets.left.shoulder, weight),
-      elbow: MathUtils.lerp(baseTargets.left.elbow, targetTargets.left.elbow, weight),
-      wrist: MathUtils.lerp(baseTargets.left.wrist, targetTargets.left.wrist, weight),
-    },
-    right: {
-      hip: MathUtils.lerp(baseTargets.right.hip, targetTargets.right.hip, weight),
-      knee: MathUtils.lerp(baseTargets.right.knee, targetTargets.right.knee, weight),
-      ankle: MathUtils.lerp(baseTargets.right.ankle, targetTargets.right.ankle, weight),
-      shoulder: MathUtils.lerp(baseTargets.right.shoulder, targetTargets.right.shoulder, weight),
-      elbow: MathUtils.lerp(baseTargets.right.elbow, targetTargets.right.elbow, weight),
-      wrist: MathUtils.lerp(baseTargets.right.wrist, targetTargets.right.wrist, weight),
-    },
-  } satisfies PhasePoseTargets;
-}
 
 export function CharacterCtrlrActiveRagdollPlayer({
   position = [0, 2.02, 6],
@@ -1016,25 +186,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const keyboardInputRef = useCharacterCtrlrKeyboardInput(controls === "keyboard");
   const idleInputRef = useRef<CharacterCtrlrInputState | null>({ ...DEFAULT_CHARACTER_CTRLR_INPUT });
   const groundedRef = useRef(false);
-  const leftSupportContactsRef = useRef<Map<number, number>>(new Map());
-  const rightSupportContactsRef = useRef<Map<number, number>>(new Map());
-  const supportStateRef = useRef<CharacterCtrlrSupportState>("none");
+  const contactStateRef = useRef<ContactTrackingState>(createInitialContactTrackingState());
   const movementModeRef = useRef<CharacterCtrlrMovementMode>("idle");
   const hasMovementInputRef = useRef(false);
   const jumpHeldRef = useRef(false);
   const gaitPhaseRef = useRef(0);
-  const gaitStateRef = useRef<GaitState>({
-    phase: "idle",
-    phaseElapsed: 0,
-    phaseDuration: 0,
-    transitionReason: "initial",
-    transitionCount: 0,
-    lastStanceSide: "right",
-  });
-  const recoveryStateRef = useRef<RecoveryState>({
-    mode: "stable",
-    elapsed: 0,
-  });
+  const gaitStateRef = useRef<GaitState>(createInitialGaitState());
+  const recoveryStateRef = useRef<RecoveryState>(createInitialRecoveryState());
   const lastSnapshotRef = useRef<CharacterCtrlrPlayerSnapshot | null>(null);
   const lastTransitionCountRef = useRef(0);
   const transitionHistoryRef = useRef<string[]>([]);
@@ -1043,14 +201,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const initialPositionRef = useRef(position);
   const standingFootPlantRef = useRef<StandingFootPlant | null>(null);
   const mixamoPoseRef = useRef<CharacterCtrlrMixamoPoseTargets | null>(null);
-  const jointCalibrationRef = useRef<Partial<Record<CharacterCtrlrHumanoidRevoluteJointKey, number>>>({});
+  const jointCalibrationRef = useRef<Partial<RevoluteJointPoseMap>>({});
   const jointCalibrationReadyRef = useRef(false);
   const debugLogCooldownRef = useRef(0);
-  const groundedGraceTimerRef = useRef(0);
-  const groundingConfirmTimerRef = useRef(0);
-  const rawContactsGroundedRef = useRef(false);
-  const jumpContactClearPendingRef = useRef(false);
-  const contactTimestampsRef = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
   const smoothedGaitEffortRef = useRef(0);
   const standBootstrapTimerRef = useRef(0);
 
@@ -1061,64 +214,20 @@ export function CharacterCtrlrActiveRagdollPlayer({
 
     groundedRef.current = nextGrounded;
     onGroundedChange?.(nextGrounded);
-  };
-
-  const syncSupportState = () => {
-    const nextSupportState = deriveSupportState(
-      leftSupportContactsRef.current.size,
-      rightSupportContactsRef.current.size,
-    );
-
-    supportStateRef.current = nextSupportState;
-    const hasContacts = nextSupportState !== "none";
-    rawContactsGroundedRef.current = hasContacts;
-
-    if (hasContacts) {
-      groundedGraceTimerRef.current = 0;
-
-      if (groundedRef.current) {
-        groundingConfirmTimerRef.current = GROUNDING_MIN_DURATION;
-      }
-    }
-
-    return nextSupportState;
+    contactStateRef.current.grounded = nextGrounded;
   };
 
   const addSupportContact = (side: SupportSide, colliderHandle: number) => {
-    if (jumpContactClearPendingRef.current) {
-      return;
-    }
-
-    const supportContacts =
-      side === "left"
-        ? leftSupportContactsRef.current
-        : rightSupportContactsRef.current;
-    const count = supportContacts.get(colliderHandle) ?? 0;
-    supportContacts.set(colliderHandle, count + 1);
-
-    if (count === 0) {
-      contactTimestampsRef.current[side] = performance.now();
-    }
-
-    syncSupportState();
+    trackSupportContact(
+      contactStateRef.current,
+      side,
+      colliderHandle,
+      performance.now(),
+    );
   };
 
   const removeSupportContact = (side: SupportSide, colliderHandle: number) => {
-    const supportContacts =
-      side === "left"
-        ? leftSupportContactsRef.current
-        : rightSupportContactsRef.current;
-    const count = supportContacts.get(colliderHandle);
-
-    if (!count) {
-      return;
-    }
-
-    if (count === 1) {
-      supportContacts.delete(colliderHandle);
-    } else {
-      supportContacts.set(colliderHandle, count - 1);
-    }
+    untrackSupportContact(contactStateRef.current, side, colliderHandle);
   };
 
   const createGroundContactEnterHandler =
@@ -1136,7 +245,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const createGroundContactExitHandler =
     (side: SupportSide) => (payload: CollisionExitPayload) => {
       removeSupportContact(side, payload.other.collider.handle);
-      syncSupportState();
+      syncTrackedSupportState(contactStateRef.current);
     };
 
   useEffect(() => {
@@ -1183,7 +292,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
     }
 
     if (!jointCalibrationReadyRef.current) {
-      const nextCalibration: Partial<Record<CharacterCtrlrHumanoidRevoluteJointKey, number>> = {};
+      const nextCalibration: Partial<RevoluteJointPoseMap> = {};
       let calibrationReady = true;
 
       for (const definition of CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS) {
@@ -1285,44 +394,23 @@ export function CharacterCtrlrActiveRagdollPlayer({
           : rightGroundProbeHit
             ? "right"
             : "none";
+    const contactState = contactStateRef.current;
     const effectiveGroundedSignal =
-      rawContactsGroundedRef.current
+      contactState.rawContactsGrounded
       || (
         probedSupportState !== "none"
-        && !jumpContactClearPendingRef.current
+        && !contactState.jumpContactClearPending
         && Math.abs(pelvis.linvel().y) < 2.0
       );
+    updateGroundingFromSignal({
+      state: contactState,
+      delta,
+      effectiveGroundedSignal,
+      probedSupportState,
+      onGroundedChange: commitGrounded,
+    });
 
-    if (effectiveGroundedSignal) {
-      groundedGraceTimerRef.current = 0;
-      groundingConfirmTimerRef.current += delta;
-
-      if (!groundedRef.current && groundingConfirmTimerRef.current >= GROUNDING_MIN_DURATION) {
-        commitGrounded(true);
-      }
-
-      if (!rawContactsGroundedRef.current && probedSupportState !== "none") {
-        supportStateRef.current = probedSupportState;
-      }
-    } else {
-      groundingConfirmTimerRef.current = 0;
-
-      if (groundedRef.current) {
-        groundedGraceTimerRef.current += delta;
-
-        if (groundedGraceTimerRef.current >= GROUNDED_GRACE_PERIOD) {
-          commitGrounded(false);
-
-          if (!rawContactsGroundedRef.current) {
-            supportStateRef.current = "none";
-          }
-        }
-      } else if (!rawContactsGroundedRef.current) {
-        supportStateRef.current = "none";
-      }
-    }
-
-    const actualSupportState = supportStateRef.current;
+    const actualSupportState = contactState.supportState;
     const grounded = groundedRef.current;
     const currentVelocity = pelvis.linvel();
     const pelvisMass = pelvis.mass();
@@ -1338,8 +426,10 @@ export function CharacterCtrlrActiveRagdollPlayer({
       && standBootstrapTimerRef.current < STAND_BOOTSTRAP_SETTLE_DURATION;
     const spawnSettleActive = standBootstrapActive || !jointCalibrationReadyRef.current;
     const locomotionCommandActive = hasMovementInput && !spawnSettleActive;
-    const activeLocomotionMode: CharacterCtrlrMovementMode =
-      locomotionCommandActive ? locomotionMode : "idle";
+    const activeLocomotionMode = deriveActiveLocomotionMode(
+      locomotionCommandActive,
+      locomotionMode,
+    );
     const activeLocomotionSpeed =
       activeLocomotionMode === "run"
         ? runSpeed
@@ -1348,7 +438,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
           : activeLocomotionMode === "crouch"
             ? crouchSpeed
             : 0;
-    const gaitConfig = getGaitConfig(activeLocomotionMode);
+    const gaitConfig = deriveGaitConfigForMode(activeLocomotionMode);
     const locomotionBlend = Math.min(
       1,
       acceleration
@@ -1388,11 +478,11 @@ export function CharacterCtrlrActiveRagdollPlayer({
     jumpHeldRef.current = jumpPressed;
 
     if (jumpTriggered) {
-      jumpContactClearPendingRef.current = true;
+      contactState.jumpContactClearPending = true;
       commitGrounded(false);
-      groundedGraceTimerRef.current = 0;
-      groundingConfirmTimerRef.current = 0;
-      rawContactsGroundedRef.current = false;
+      contactState.groundedGraceTimer = 0;
+      contactState.groundingConfirmTimer = 0;
+      contactState.rawContactsGrounded = false;
       pelvis.applyImpulse(
         { x: 0, y: jumpImpulse * pelvisMass, z: 0 },
         true,
@@ -1403,16 +493,16 @@ export function CharacterCtrlrActiveRagdollPlayer({
       );
     }
 
-    if (jumpContactClearPendingRef.current && currentVelocity.y > 0.5) {
-      leftSupportContactsRef.current.clear();
-      rightSupportContactsRef.current.clear();
-      supportStateRef.current = "none";
-      jumpContactClearPendingRef.current = false;
-    } else if (jumpContactClearPendingRef.current && !jumpTriggered && currentVelocity.y <= 0) {
-      jumpContactClearPendingRef.current = false;
+    if (contactState.jumpContactClearPending && currentVelocity.y > 0.5) {
+      contactState.leftSupportContacts.clear();
+      contactState.rightSupportContacts.clear();
+      contactState.supportState = "none";
+      contactState.jumpContactClearPending = false;
+    } else if (contactState.jumpContactClearPending && !jumpTriggered && currentVelocity.y <= 0) {
+      contactState.jumpContactClearPending = false;
     }
 
-    const supportStateAfterJump = jumpTriggered ? "none" : supportStateRef.current;
+    const supportStateAfterJump = jumpTriggered ? "none" : contactState.supportState;
     const targetFacing = hasMovementInput
       ? Math.atan2(movement.x, movement.z)
       : playerFacing;
@@ -1458,8 +548,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
         ? "double"
         : supportStateAfterJump;
     
-    const MIN_PHASE_HOLD = 0.05;
-    const canTransition = gaitState.phaseElapsed >= MIN_PHASE_HOLD;
+    const canTransition = gaitState.phaseElapsed >= MIN_GAIT_PHASE_HOLD;
 
     if (!grounded || supportStateForPhase === "none") {
       transitionGaitState(
@@ -1512,8 +601,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
       && gaitState.phaseDuration > 0
       && gaitState.phaseElapsed >= gaitState.phaseDuration
     ) {
-      const nextStanceSide: SupportSide =
-        gaitState.lastStanceSide === "left" ? "right" : "left";
+      const nextStanceSide = flipSupportSide(gaitState.lastStanceSide);
       transitionGaitState(
         gaitState,
         nextStanceSide === "left" ? "left-stance" : "right-stance",
@@ -2471,40 +1559,66 @@ export function CharacterCtrlrActiveRagdollPlayer({
       );
     }
 
-    const resolveJointTarget = (
-      key: CharacterCtrlrHumanoidRevoluteJointKey,
-      targetPosition: number,
-    ) => {
-      const [min, max] = REVOLUTE_JOINT_LIMITS[key];
-      const calibrationOffset = jointCalibrationRef.current[key] ?? 0;
-
-      return MathUtils.clamp(targetPosition + calibrationOffset, min, max);
-    };
-
     const hipLeftTarget = resolveJointTarget(
       "hipLeft",
       MathUtils.clamp(phasePoseTargets.left.hip - airborneAmount * 0.04, -0.9, 0.7),
+      jointCalibrationRef.current,
     );
     const hipRightTarget = resolveJointTarget(
       "hipRight",
       MathUtils.clamp(phasePoseTargets.right.hip - airborneAmount * 0.04, -0.9, 0.7),
+      jointCalibrationRef.current,
     );
     const shoulderLeftTarget = resolveJointTarget(
       "shoulderLeft",
       MathUtils.clamp(phasePoseTargets.left.shoulder, -1.1, 0.9),
+      jointCalibrationRef.current,
     );
     const shoulderRightTarget = resolveJointTarget(
       "shoulderRight",
       MathUtils.clamp(phasePoseTargets.right.shoulder, -1.1, 0.9),
+      jointCalibrationRef.current,
     );
-    const kneeLeftTarget = resolveJointTarget("kneeLeft", phasePoseTargets.left.knee);
-    const kneeRightTarget = resolveJointTarget("kneeRight", phasePoseTargets.right.knee);
-    const ankleLeftTarget = resolveJointTarget("ankleLeft", phasePoseTargets.left.ankle);
-    const ankleRightTarget = resolveJointTarget("ankleRight", phasePoseTargets.right.ankle);
-    const elbowLeftTarget = resolveJointTarget("elbowLeft", phasePoseTargets.left.elbow);
-    const elbowRightTarget = resolveJointTarget("elbowRight", phasePoseTargets.right.elbow);
-    const wristLeftTarget = resolveJointTarget("wristLeft", phasePoseTargets.left.wrist);
-    const wristRightTarget = resolveJointTarget("wristRight", phasePoseTargets.right.wrist);
+    const kneeLeftTarget = resolveJointTarget(
+      "kneeLeft",
+      phasePoseTargets.left.knee,
+      jointCalibrationRef.current,
+    );
+    const kneeRightTarget = resolveJointTarget(
+      "kneeRight",
+      phasePoseTargets.right.knee,
+      jointCalibrationRef.current,
+    );
+    const ankleLeftTarget = resolveJointTarget(
+      "ankleLeft",
+      phasePoseTargets.left.ankle,
+      jointCalibrationRef.current,
+    );
+    const ankleRightTarget = resolveJointTarget(
+      "ankleRight",
+      phasePoseTargets.right.ankle,
+      jointCalibrationRef.current,
+    );
+    const elbowLeftTarget = resolveJointTarget(
+      "elbowLeft",
+      phasePoseTargets.left.elbow,
+      jointCalibrationRef.current,
+    );
+    const elbowRightTarget = resolveJointTarget(
+      "elbowRight",
+      phasePoseTargets.right.elbow,
+      jointCalibrationRef.current,
+    );
+    const wristLeftTarget = resolveJointTarget(
+      "wristLeft",
+      phasePoseTargets.left.wrist,
+      jointCalibrationRef.current,
+    );
+    const wristRightTarget = resolveJointTarget(
+      "wristRight",
+      phasePoseTargets.right.wrist,
+      jointCalibrationRef.current,
+    );
     const liveLegJointAngles = {
       hipLeft: sampleRevoluteJointAngle(pelvis, upperLegLeft),
       hipRight: sampleRevoluteJointAngle(pelvis, upperLegRight),
@@ -2687,8 +1801,8 @@ export function CharacterCtrlrActiveRagdollPlayer({
       commandEffort,
       speedRatio,
       horizontalSpeed,
-      leftSupportContacts: leftSupportContactsRef.current.size,
-      rightSupportContacts: rightSupportContactsRef.current.size,
+      leftSupportContacts: contactState.leftSupportContacts.size,
+      rightSupportContacts: contactState.rightSupportContacts.size,
       supportLateralError,
       supportForwardError,
       supportHeightError,
