@@ -80,11 +80,14 @@ const jointRelativeEuler = new Euler(0, 0, 0, "XYZ");
 
 const GRAVITY = 9.81;
 const FOOT_SUPPORT_OFFSET = 0.08;
-const STAND_PELVIS_HEIGHT = 1.76;
+const STAND_PELVIS_HEIGHT = 1.9;
 const STAND_ASSIST_MAX_SPEED = 0.42;
 const STAND_FOOT_LATERAL_OFFSET = 0.18;
 const STAND_FOOT_FORWARD_OFFSET = 0.12;
 const STAND_SEGMENT_MAX_TORQUE = 0.6;
+const STAND_HIP_TARGET = -0.08;
+const STAND_KNEE_TARGET = -0.22;
+const STAND_ANKLE_TARGET = 0.08;
 const GROUNDED_GRACE_PERIOD = 0.08;
 const GROUNDING_MIN_DURATION = 0.03;
 const GROUND_PROBE_ORIGIN_OFFSET = 0.06;
@@ -909,15 +912,15 @@ function applyStandingPoseTargets(targets: PhasePoseTargets) {
     chestRoll: 0,
     left: {
       ...targets.left,
-      hip: 0,
-      knee: 0,
-      ankle: 0.04,
+      hip: STAND_HIP_TARGET,
+      knee: STAND_KNEE_TARGET,
+      ankle: STAND_ANKLE_TARGET,
     },
     right: {
       ...targets.right,
-      hip: 0,
-      knee: 0,
-      ankle: 0.04,
+      hip: STAND_HIP_TARGET,
+      knee: STAND_KNEE_TARGET,
+      ankle: STAND_ANKLE_TARGET,
     },
   } satisfies PhasePoseTargets;
 }
@@ -1095,7 +1098,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const createGroundContactEnterHandler =
     (side: SupportSide) => (payload: CollisionEnterPayload) => {
       const normal = payload.manifold.normal();
-      const supportY = payload.flipped ? -normal.y : normal.y;
+      const supportY = payload.flipped ? normal.y : -normal.y;
 
       if (supportY < 0.2) {
         return;
