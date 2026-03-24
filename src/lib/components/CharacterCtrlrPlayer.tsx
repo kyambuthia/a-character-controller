@@ -12,8 +12,8 @@ import {
   useRef,
 } from "react";
 import { Group, MathUtils, Vector3 } from "three";
+import { BoxmanHero } from "./BoxmanHero";
 import { CharacterCtrlrPlayerDebug } from "./CharacterCtrlrPlayerDebug";
-import { PrimitiveHero } from "./PrimitiveHero";
 import { useCharacterCtrlrStore, useCharacterCtrlrStoreApi } from "../CharacterCtrlrProvider";
 import { useCharacterCtrlrKeyboardInput } from "../useCharacterCtrlrKeyboardInput";
 import {
@@ -486,7 +486,7 @@ export function CharacterCtrlrPlayer({
           onCollisionEnter={handleGroundContactEnter}
           onCollisionExit={handleGroundContactExit}
         />
-        <PrimitiveHero
+        <BoxmanHero
           movementMode={movementMode}
           rig={{
             rootRef: visualRef,
