@@ -7,18 +7,19 @@ import {
   Vector3,
 } from "three";
 import {
-  sampleDemoPlanetSurfaceAtPosition,
-  writeDemoPlanetColor,
+  DEMO_PLANET_RADIUS,
+  sampleDemoPlanetHeight,
+  writeDemoPlanetColorFromHeight,
 } from "./demoTerrain";
 
 const TILE_SIZE = 8;
 const TILE_OVERLAP = 0.48;
-const TILE_SEGMENTS = 28;
-const TILE_GRID_RADIUS = 2;
+const TILE_SEGMENTS = 16;
+const TILE_GRID_RADIUS = 1;
 const TILE_SURFACE_OFFSET = 0.012;
+const TILE_REFRESH_INTERVAL = 0.12;
 
 const tileDirection = new Vector3();
-const tileSurfaceNormal = new Vector3();
 const tileColor = new Color();
 const tileCenterPosition = new Vector3();
 const tileFrameUp = new Vector3();
@@ -30,6 +31,7 @@ const playerTangent = new Vector3();
 const playerBitangent = new Vector3();
 const snappedTileAnchor = new Vector3();
 const tileUpdateDelta = new Vector3();
+const tileCenterDirection = new Vector3();
 
 function buildTileGeometry() {
   const geometry = new PlaneGeometry(
@@ -81,6 +83,9 @@ function writeTileGeometry(
   const stride = TILE_SEGMENTS + 1;
   const fullSize = TILE_SIZE + TILE_OVERLAP * 2;
   const halfSize = fullSize * 0.5;
+  const centerHeight = sampleDemoPlanetHeight(
+    tileCenterDirection.copy(tileCenter).normalize(),
+  );
 
   for (let row = 0; row <= TILE_SEGMENTS; row += 1) {
     const z = halfSize - (row / TILE_SEGMENTS) * fullSize;
@@ -96,41 +101,22 @@ function writeTileGeometry(
         .addScaledVector(bitangent, z)
         .normalize();
 
-        const surface = sampleDemoPlanetSurfaceAtPosition(tileDirection);
-        tileSurfaceNormal.copy(surface.normal);
-        const point = surface.point.addScaledVector(tileSurfaceNormal, TILE_SURFACE_OFFSET);
+      const height = sampleDemoPlanetHeight(tileDirection);
+      const radius = DEMO_PLANET_RADIUS + height + TILE_SURFACE_OFFSET;
+      const pseudoSlope = Math.min(1, Math.abs(height - centerHeight) * 0.26);
 
-      positions[offset] = point.x;
-      positions[offset + 1] = point.y;
-      positions[offset + 2] = point.z;
-    }
-  }
+      positions[offset] = tileDirection.x * radius;
+      positions[offset + 1] = tileDirection.y * radius;
+      positions[offset + 2] = tileDirection.z * radius;
 
-  positionAttribute.needsUpdate = true;
-  geometry.computeVertexNormals();
-
-  const normalAttribute = geometry.getAttribute("normal") as BufferAttribute;
-  const normals = normalAttribute.array as Float32Array;
-
-  for (let row = 0; row <= TILE_SEGMENTS; row += 1) {
-    for (let column = 0; column <= TILE_SEGMENTS; column += 1) {
-      const index = row * stride + column;
-      const offset = index * 3;
-
-      tileDirection.set(positions[offset], positions[offset + 1], positions[offset + 2]).normalize();
-      
-      const nx = normals[offset];
-      const ny = normals[offset + 1];
-      const nz = normals[offset + 2];
-      const slope = 1 - Math.max(0, nx * tileDirection.x + ny * tileDirection.y + nz * tileDirection.z);
-
-      writeDemoPlanetColor(tileDirection, slope, tileColor);
+      writeDemoPlanetColorFromHeight(tileDirection, height, pseudoSlope, tileColor);
       colors[offset] = tileColor.r;
       colors[offset + 1] = tileColor.g;
       colors[offset + 2] = tileColor.b;
     }
   }
 
+  positionAttribute.needsUpdate = true;
   colorAttribute.needsUpdate = true;
 }
 
@@ -160,8 +146,10 @@ export function DemoPlanetDetailPatch(props: {
     return items;
   }, []);
   const lastAnchorRef = useRef(new Vector3(Number.POSITIVE_INFINITY, 0, 0));
+  const refreshCooldownRef = useRef(0);
 
-  useFrame(() => {
+  useFrame((_, dt) => {
+    refreshCooldownRef.current = Math.max(0, refreshCooldownRef.current - dt);
     const basis = getLocalSurfaceBasis(props.upRef.current);
     playerTangent.copy(basis.tangent);
     playerBitangent.copy(basis.bitangent);
@@ -185,8 +173,12 @@ export function DemoPlanetDetailPatch(props: {
     if (tileUpdateDelta.lengthSq() < 0.01) {
       return;
     }
+    if (refreshCooldownRef.current > 0) {
+      return;
+    }
 
     lastAnchorRef.current.copy(snappedTileAnchor);
+    refreshCooldownRef.current = TILE_REFRESH_INTERVAL;
 
     for (const tile of tiles) {
       tileCenterPosition
@@ -210,7 +202,6 @@ export function DemoPlanetDetailPatch(props: {
           key={tile.key}
           geometry={tile.geometry}
           frustumCulled={false}
-          castShadow
           receiveShadow
         >
           <meshStandardMaterial
