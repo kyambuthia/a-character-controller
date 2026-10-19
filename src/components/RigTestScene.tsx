@@ -2,7 +2,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, useGLTF } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Euler, PropertyBinding, Quaternion, type Object3D } from "three";
-import { SkeletonUtils } from "three-stdlib";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import {
   PROCEDURAL_BONE_NAMES,
   deriveBoneAxisTest,
@@ -30,7 +30,7 @@ type RestBone = { bone: Object3D; rest: Quaternion };
 
 function ProceduralBoxman({ onTestStep }: { onTestStep: (label: string) => void }) {
   const gltf = useGLTF(MODEL_URL);
-  const scene = useMemo(() => SkeletonUtils.clone(gltf.scene), [gltf.scene]);
+  const scene = useMemo(() => cloneSkinned(gltf.scene), [gltf.scene]);
   const bones = useRef<Partial<Record<BoneName, RestBone>>>({});
   const lastLabel = useRef("");
 

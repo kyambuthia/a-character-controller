@@ -2,7 +2,7 @@ import { useAnimations, useGLTF } from "@react-three/drei";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import type { Group } from "three";
 import { LoopOnce, LoopRepeat } from "three";
-import { SkeletonUtils } from "three-stdlib";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { CharacterCtrlrMovementMode } from "../types";
 
 type BoxmanHeroRig = {
@@ -55,7 +55,7 @@ export function BoxmanHero(props: {
   rig: BoxmanHeroRig;
 }) {
   const gltf = useGLTF("/assets/boxman.glb");
-  const scene = useMemo(() => SkeletonUtils.clone(gltf.scene), [gltf.scene]);
+  const scene = useMemo(() => cloneSkinned(gltf.scene), [gltf.scene]);
   const { actions } = useAnimations(gltf.animations, scene);
   const activeClipRef = useRef<string | null>(null);
 

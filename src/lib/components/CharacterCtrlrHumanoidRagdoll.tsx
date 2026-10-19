@@ -76,13 +76,15 @@ function HumanoidBodyVisual({
     : undefined;
 
   return (
-    // Hidden meshes still define the auto-generated colliders, so they stay mounted.
+    // These meshes define the auto-generated colliders, so they must stay mounted and the mesh
+    // itself must stay `visible`: @react-three/rapier builds colliders with traverseVisible, and a
+    // hidden mesh leaves a collider-less, massless body that gravity and impulses cannot move.
+    // Hiding is done on the material instead, which the renderer skips.
     <mesh
       castShadow={!hidden}
       receiveShadow={!hidden}
       position={definition.meshOffset}
       userData={userData}
-      visible={!hidden}
     >
       {definition.shape.kind === "sphere" ? (
         <sphereGeometry args={[definition.shape.radius, 24, 24]} />
@@ -92,6 +94,7 @@ function HumanoidBodyVisual({
       <meshStandardMaterial
         color={definition.color}
         roughness={definition.roughness ?? 0.82}
+        visible={!hidden}
       />
     </mesh>
   );

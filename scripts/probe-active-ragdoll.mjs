@@ -9,6 +9,7 @@
 // Usage:
 //   node scripts/probe-active-ragdoll.mjs [--scenario spawn_idle_stability]
 //       [--duration 8] [--interval 0.15] [--port 5199] [--player ragdoll]
+//       [--shove x,y,z] [--shoveAt 4] [--query key=value&key2=value2]
 //
 // Exit code 0 means the probe ran (regardless of pass/fail verdict).
 
@@ -33,7 +34,9 @@ const PLAYER = ARGS.player ?? "ragdoll";
 // Optional push: --shove x,y,z (whole-body velocity change in m/s, z is forward) applied --shoveAt seconds in.
 const SHOVE = ARGS.shove ? String(ARGS.shove).split(",").map(Number) : null;
 const SHOVE_AT_SECONDS = Number(ARGS.shoveAt ?? 4);
-const DEV_URL = `http://127.0.0.1:${PORT}/?player=${PLAYER}&debug=1&scenario=${SCENARIO}`;
+// Extra URL parameters for the demo, e.g. --query skin=boxes or --query arena=flat&skin=boxes.
+const EXTRA_QUERY = ARGS.query ? `&${ARGS.query}` : "";
+const DEV_URL = `http://127.0.0.1:${PORT}/?player=${PLAYER}&debug=1&scenario=${SCENARIO}${EXTRA_QUERY}`;
 const BASE_FLAGS = [
   "--headless=new",
   "--disable-gpu",
@@ -365,6 +368,11 @@ async function main() {
         const last = positioned[positioned.length - 1].pelvisPosition;
         const drift = (p) => Math.hypot(p[0] - first[0], p[2] - first[2]);
         console.log(`pelvis drift: max ${Math.max(...positioned.map((s) => drift(s.pelvisPosition))).toFixed(2)}m, final ${drift(last).toFixed(2)}m`);
+      }
+      if (lastSample.simulatedTime != null) {
+        const wallSeconds = lastSample.__probeT;
+        const ratio = lastSample.simulatedTime / Math.max(wallSeconds, 1e-6);
+        console.log(`simulated time: ${lastSample.simulatedTime.toFixed(2)}s over ${wallSeconds.toFixed(2)}s wall (${(ratio * 100).toFixed(0)}% real time)`);
       }
       console.log(`worst capture urgency: ${worstUrgency.toFixed(2)}`);
       console.log(`warnings: ${JSON.stringify(warningCounts)}`);

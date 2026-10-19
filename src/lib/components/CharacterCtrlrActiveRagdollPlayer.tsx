@@ -228,6 +228,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const debugLogCooldownRef = useRef(0);
   const smoothedGaitEffortRef = useRef(0);
   const standBootstrapTimerRef = useRef(0);
+  // Simulated seconds the controller has run; lets debug tooling compare sim time to wall time.
+  const simulatedTimeRef = useRef(0);
+  const masslessWarningIssuedRef = useRef(false);
 
   const driveJoint = (
     joint: RevoluteImpulseJoint | null,
@@ -331,6 +334,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
   // (a 2 fps render loop launched the whole body).
   useBeforePhysicsStep((physicsWorld) => {
     const delta = physicsWorld.timestep;
+    simulatedTimeRef.current += delta;
     const pelvis = bodyRefs.pelvis.current;
     const chest = bodyRefs.chest.current;
     const upperLegLeft = bodyRefs.upperLegLeft.current;
@@ -477,6 +481,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
     const grounded = groundedRef.current;
     const currentVelocity = pelvis.linvel();
     const pelvisMass = pelvis.mass();
+    if (pelvisMass <= 0 && !masslessWarningIssuedRef.current) {
+      // A body with no colliders has no mass, so gravity, impulses and motors cannot move it.
+      masslessWarningIssuedRef.current = true;
+      console.warn(
+        "[CharacterCtrlrActiveRagdollPlayer] pelvis has zero mass; its colliders are missing, so the ragdoll will not move.",
+      );
+    }
     const horizontalSpeed = Math.hypot(currentVelocity.x, currentVelocity.z);
     const turnInput = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
     const pureTurnRequested =
@@ -1798,6 +1809,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
         ).__characterCtrlrActiveRagdollDebug = {
           ...locomotionDebugState,
           pelvisPosition: [rootPosition.x, rootPosition.y, rootPosition.z],
+          simulatedTime: simulatedTimeRef.current,
           jointCalibrationReady: jointCalibrationReadyRef.current,
           jointCalibration: jointCalibrationRef.current,
           legJointAngles: liveLegJointAngles,

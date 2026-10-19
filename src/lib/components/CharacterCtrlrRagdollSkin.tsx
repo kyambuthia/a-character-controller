@@ -1,7 +1,7 @@
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import { useEffect, useMemo } from "react";
-import { SkeletonUtils } from "three-stdlib";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { CharacterCtrlrHumanoidBodyRefs } from "./CharacterCtrlrHumanoidData";
 import { createRagdollSkinRig } from "./ragdollSkin";
 
@@ -16,7 +16,7 @@ export function CharacterCtrlrRagdollSkin({
   ignoreCameraOcclusion?: boolean;
 }) {
   const gltf = useGLTF(url);
-  const rig = useMemo(() => createRagdollSkinRig(SkeletonUtils.clone(gltf.scene)), [gltf.scene]);
+  const rig = useMemo(() => createRagdollSkinRig(cloneSkinned(gltf.scene)), [gltf.scene]);
 
   useEffect(() => {
     rig.root.traverse((child) => {

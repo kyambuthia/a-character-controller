@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Box3, Quaternion, SkinnedMesh, Vector3, type Object3D } from "three";
-import { GLTFLoader } from "three-stdlib";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   CHARACTER_CTRLR_HUMANOID_BODY_DEFINITIONS,
   type CharacterCtrlrHumanoidBodyKey,
