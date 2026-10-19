@@ -37,6 +37,14 @@ function deriveScenarioInput(
       return elapsedSeconds >= 2 && elapsedSeconds < 10
         ? { ...DEFAULT_CHARACTER_CTRLR_INPUT, forward: true }
         : { ...DEFAULT_CHARACTER_CTRLR_INPUT };
+    case "steady_forward_run":
+      return elapsedSeconds >= 2 && elapsedSeconds < 10
+        ? { ...DEFAULT_CHARACTER_CTRLR_INPUT, forward: true, run: true }
+        : { ...DEFAULT_CHARACTER_CTRLR_INPUT };
+    case "steady_crouch_walk":
+      return elapsedSeconds >= 2 && elapsedSeconds < 10
+        ? { ...DEFAULT_CHARACTER_CTRLR_INPUT, forward: true, crouch: true }
+        : { ...DEFAULT_CHARACTER_CTRLR_INPUT };
     case "walk_run_walk_transition":
       if (elapsedSeconds >= 2 && elapsedSeconds < 5) {
         return { ...DEFAULT_CHARACTER_CTRLR_INPUT, forward: true };
