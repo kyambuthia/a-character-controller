@@ -5,10 +5,14 @@ import type { CharacterCtrlrGaitConfig, RevoluteJointPoseMap } from "./controlle
 
 export const GRAVITY = 9.81;
 export const FOOT_SUPPORT_OFFSET = 0.08;
-export const STAND_PELVIS_HEIGHT = 1.9;
+// Pelvis origin to the sole: hip -0.22, knee -1.04, ankle -1.82, foot box centre -1.9, sole -1.98
+// (see CHARACTER_CTRLR_HUMANOID_BODY_DEFINITIONS).
+export const STAND_PELVIS_HEIGHT = 1.98;
 export const STAND_ASSIST_MAX_SPEED = 0.42;
 export const STAND_FOOT_LATERAL_OFFSET = 0.18;
-export const STAND_FOOT_FORWARD_OFFSET = 0.12;
+// The foot box is centred 0.14 m ahead of the ankle, so standing feet sit this far ahead of the
+// pelvis/ankle line. Balance is measured about the ankle line, not the middle of the foot.
+export const STAND_FOOT_FORWARD_OFFSET = 0.14;
 export const STAND_SEGMENT_MAX_TORQUE = 0.6;
 export const STAND_HIP_TARGET = -0.08;
 export const STAND_KNEE_TARGET = -0.22;

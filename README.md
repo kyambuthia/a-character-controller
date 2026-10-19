@@ -4,11 +4,11 @@
 
 ## WIP
 
-This does not work yet.
+The active ragdoll now **stands**. Walking, turning, running and recovery stepping are still unsolved.
 
-The active-ragdoll controller is still unstable and the walking controller is not solved. If you know how to make this character stand, step, and walk reliably, please help.
+Standing holds indefinitely and absorbs pushes of at least 1.5 m/s in any direction and a 3 m/s hop (measured with `scripts/probe-active-ragdoll.mjs`, see below). The fix was in the motor layer, not the gait logic: Rapier's default acceleration-based joint motors cannot hold weight through light limbs, so joints now use force-based torque motors (`MOTOR_TORQUE_SCALE` in `active-ragdoll/motors.ts`), and the controller runs on the fixed physics step instead of the render loop.
 
-## Current demo capture
+An important caveat: the rig's torso and legs are rotation-locked (pelvis/chest yaw only, legs pitch only), so it cannot tip over. That makes this a sagittal stand, not full 3D balance. Unlocking those axes is the next hard step before real walking.
 
 Active ragdoll WIP:
 
@@ -65,22 +65,25 @@ What is not finished yet:
 
 ## Current issues
 
-The active-ragdoll controller is still experimental and currently unstable.
+Standing is solved (see WIP above). Still open:
 
-Known problems:
-
-- the active ragdoll can fail to settle into a reliable neutral stand and may kneel, collapse, or oscillate after spawn
-- first-step and continuous walking behavior are not yet dependable, especially when balance recovery, support switching, and leg drive interact
+- first-step and continuous walking are not dependable, especially where balance recovery, support switching and leg drive interact
 - turning and prolonged running can still destabilize the torso and push the controller into stumble/fall recovery
-- the new scripted validation scenarios are useful for repeatability, but they are not passing yet; recent headless probes still reported the ragdoll in `fall/airborne` with lost support instead of a stable stand or walk
-- ground detection has been improved with hysteresis and downward ground probes, but support/grounded transitions are still under active tuning
+- the scripted walking validation scenarios are not passing yet
+- the rig is rotation-locked, so lateral balance and torso tilt are not actually being controlled
+- standing still leans on world-space impulse assists (pelvis height/centring, foot planting) on top of the joint motors; they should be dialled down once the motors alone are trusted
 - the Mixamo-driven target path is useful for motion reference, but it does not yet guarantee stable physical walking
 - the capsule controller remains the more reliable baseline; the active ragdoll is the current research path
 
+How standing was verified:
+
+- `scripts/sim-standing.mts` runs the humanoid headlessly on plain Rapier (no browser) and prints pelvis height, tilt and joint angles; `--force` switches to force-based motors, `--pushz`/`--pushx` shove the pelvis
+- `src/lib/components/active-ragdoll/standing.sim.test.ts` holds a 12 s stand, checks pushes in three directions, and documents that the default motor model buckles
+- `node scripts/probe-active-ragdoll.mjs --scenario spawn_idle_stability --shove 0,0,1.5` runs the real React player in headless Chrome, applies a whole-body push (m/s) through a debug-only hook, and prints a fixed-step trace of the response
+
 Important engineering note:
 
-- the current instability is not mainly a Rapier problem
-- high COM plus small feet creates inverted-pendulum instability in any engine
+- high COM plus small feet creates inverted-pendulum instability in any engine, but the standing collapse was not that: it was the motor model
 - the gait FSM, balance strategy, support switching, and step-placement logic are the primary controller-side responsibilities still under active work
 
 ## Install

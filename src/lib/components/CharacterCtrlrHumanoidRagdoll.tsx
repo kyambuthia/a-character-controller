@@ -53,6 +53,8 @@ export type CharacterCtrlrHumanoidRagdollProps = {
   timeScale?: number;
   manualStepCount?: number;
   ignoreCameraOcclusion?: boolean;
+  /** Hide the coloured collider boxes, e.g. when a skinned character model is drawn instead. */
+  hideBodyVisuals?: boolean;
   locomotionDebugRef?: RefObject<CharacterCtrlrLocomotionDebugState | null>;
   bodyRefs?: CharacterCtrlrHumanoidBodyRefs;
   revoluteJointRefs?: CharacterCtrlrHumanoidRevoluteJointRefs;
@@ -63,20 +65,24 @@ export type CharacterCtrlrHumanoidRagdollProps = {
 function HumanoidBodyVisual({
   definition,
   ignoreCameraOcclusion,
+  hidden,
 }: {
   definition: CharacterCtrlrHumanoidBodyDefinition;
   ignoreCameraOcclusion: boolean;
+  hidden: boolean;
 }) {
   const userData = ignoreCameraOcclusion
     ? { characterCtrlrIgnoreCameraOcclusion: true }
     : undefined;
 
   return (
+    // Hidden meshes still define the auto-generated colliders, so they stay mounted.
     <mesh
-      castShadow
-      receiveShadow
+      castShadow={!hidden}
+      receiveShadow={!hidden}
       position={definition.meshOffset}
       userData={userData}
+      visible={!hidden}
     >
       {definition.shape.kind === "sphere" ? (
         <sphereGeometry args={[definition.shape.radius, 24, 24]} />
@@ -95,12 +101,14 @@ function HumanoidRigidBody({
   bodyRef,
   definition,
   ignoreCameraOcclusion,
+  hideVisuals,
   sharedBodyProps,
   bodyProps,
 }: {
   bodyRef: CharacterCtrlrHumanoidBodyRefs[CharacterCtrlrHumanoidBodyKey];
   definition: CharacterCtrlrHumanoidBodyDefinition;
   ignoreCameraOcclusion: boolean;
+  hideVisuals: boolean;
   sharedBodyProps?: CharacterCtrlrHumanoidBodyOverrides;
   bodyProps?: CharacterCtrlrHumanoidBodyOverrides;
 }) {
@@ -124,6 +132,7 @@ function HumanoidRigidBody({
     >
       <HumanoidBodyVisual
         definition={definition}
+        hidden={hideVisuals}
         ignoreCameraOcclusion={ignoreCameraOcclusion}
       />
     </RigidBody>
@@ -212,6 +221,7 @@ export function CharacterCtrlrHumanoidRagdoll({
   timeScale = 1,
   manualStepCount = 0,
   ignoreCameraOcclusion = false,
+  hideBodyVisuals = false,
   locomotionDebugRef,
   bodyRefs: externalBodyRefs,
   revoluteJointRefs,
@@ -292,6 +302,7 @@ export function CharacterCtrlrHumanoidRagdoll({
           bodyRef={bodyRefs[definition.key]}
           bodyProps={bodyProps?.[definition.key]}
           definition={definition}
+          hideVisuals={hideBodyVisuals}
           ignoreCameraOcclusion={ignoreCameraOcclusion}
           sharedBodyProps={sharedBodyProps}
         />

@@ -1,11 +1,12 @@
-import { useFrame } from "@react-three/fiber";
 import {
   type CollisionEnterPayload,
   type CollisionExitPayload,
   type RapierRigidBody,
+  useBeforePhysicsStep,
   useRapier,
 } from "@react-three/rapier";
 import {
+  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +38,7 @@ import {
   type CharacterCtrlrHumanoidRevoluteJointRefs,
 } from "./CharacterCtrlrHumanoidData";
 import { CharacterCtrlrHumanoidRagdoll } from "./CharacterCtrlrHumanoidRagdoll";
+import { CharacterCtrlrRagdollSkin } from "./CharacterCtrlrRagdollSkin";
 import {
   CharacterCtrlrMixamoMotionDriver,
   type CharacterCtrlrMixamoPoseTargets,
@@ -142,6 +144,11 @@ export type CharacterCtrlrActiveRagdollPlayerProps = {
   input?: Partial<CharacterCtrlrInputState>;
   inputRef?: RefObject<CharacterCtrlrInputState | null>;
   mixamoSource?: CharacterCtrlrMixamoMotionSource;
+  /**
+   * URL of a rigged character .glb (see public/assets/character.glb) drawn on top of the physics
+   * bodies. When omitted the coloured collider boxes are drawn instead.
+   */
+  characterModelUrl?: string;
   walkSpeed?: number;
   runSpeed?: number;
   crouchSpeed?: number;
@@ -172,6 +179,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
   input,
   inputRef,
   mixamoSource,
+  characterModelUrl,
   walkSpeed = 2.7,
   runSpeed = 4.7,
   crouchSpeed = 1.7,
@@ -220,6 +228,13 @@ export function CharacterCtrlrActiveRagdollPlayer({
   const debugLogCooldownRef = useRef(0);
   const smoothedGaitEffortRef = useRef(0);
   const standBootstrapTimerRef = useRef(0);
+
+  const driveJoint = (
+    joint: RevoluteImpulseJoint | null,
+    targetPosition: number,
+    stiffness: number,
+    damping: number,
+  ) => driveJointToPosition(joint, targetPosition, stiffness, damping, rapier.MotorModel.ForceBased);
 
   const commitGrounded = (nextGrounded: boolean) => {
     if (groundedRef.current === nextGrounded) {
@@ -282,7 +297,40 @@ export function CharacterCtrlrActiveRagdollPlayer({
     onSnapshotChange?.(initialSnapshot);
   }, [onSnapshotChange, setPlayerSnapshot, storeApi]);
 
-  useFrame((_, delta) => {
+  // Debug-only: lets scripts/probe-active-ragdoll.mjs push the whole body with an exact velocity
+  // change (m/s), applied as mass-proportional impulses so every segment moves together.
+  useEffect(() => {
+    if (!debug || typeof window === "undefined") {
+      return;
+    }
+
+    const debugWindow = window as typeof window & {
+      __characterCtrlrActiveRagdollShove?: (x: number, y: number, z: number) => void;
+      __characterCtrlrActiveRagdollTrace?: Array<Record<string, unknown>>;
+    };
+    debugWindow.__characterCtrlrActiveRagdollTrace = [];
+    debugWindow.__characterCtrlrActiveRagdollShove = (x, y, z) => {
+      for (const bodyRef of bodyRefList) {
+        const body = bodyRef.current;
+        if (body) {
+          const mass = body.mass();
+          body.applyImpulse({ x: x * mass, y: y * mass, z: z * mass }, true);
+        }
+      }
+      debugWindow.__characterCtrlrActiveRagdollTrace?.push({ marker: `shove ${x},${y},${z} m/s` });
+    };
+
+    return () => {
+      delete debugWindow.__characterCtrlrActiveRagdollShove;
+      delete debugWindow.__characterCtrlrActiveRagdollTrace;
+    };
+  }, [bodyRefList, debug]);
+
+  // The controller runs once per fixed physics step instead of once per render frame. Its impulses
+  // are scaled by `delta`, so driving it from the render loop made behaviour depend on frame rate
+  // (a 2 fps render loop launched the whole body).
+  useBeforePhysicsStep((physicsWorld) => {
+    const delta = physicsWorld.timestep;
     const pelvis = bodyRefs.pelvis.current;
     const chest = bodyRefs.chest.current;
     const upperLegLeft = bodyRefs.upperLegLeft.current;
@@ -738,6 +786,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
           supportMeasurement.center[1],
           supportMeasurement.center[2],
         );
+        // The measured centre is mid-foot; the pelvis balances over the ankle line, which is
+        // STAND_FOOT_FORWARD_OFFSET behind it.
+        supportCenter.addScaledVector(facingForward, -STAND_FOOT_FORWARD_OFFSET);
 
         const lateralError =
           (supportCenter.x - rootPosition.x) * facingRight.x
@@ -1480,73 +1531,73 @@ export function CharacterCtrlrActiveRagdollPlayer({
       ankleRight: sampleRevoluteJointAngle(lowerLegRight, rightFoot),
     };
 
-    driveJointToPosition(
+    driveJoint(
       jointRefs.hipLeft.current,
       hipLeftTarget,
       groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
       groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.hipRight.current,
       hipRightTarget,
       groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
       groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.shoulderLeft.current,
       shoulderLeftTarget,
       standingSupport ? 9.2 : 8.4,
       standingSupport ? 2.8 : 2.2,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.shoulderRight.current,
       shoulderRightTarget,
       standingSupport ? 9.2 : 8.4,
       standingSupport ? 2.8 : 2.2,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.kneeLeft.current,
       kneeLeftTarget,
       groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
       groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.kneeRight.current,
       kneeRightTarget,
       groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
       groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.ankleLeft.current,
       ankleLeftTarget,
       groundedAfterControl ? (standingSupport ? 28 : 15) : 9,
       groundedAfterControl ? (standingSupport ? 6.8 : 3.1) : 2.3,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.ankleRight.current,
       ankleRightTarget,
       groundedAfterControl ? (standingSupport ? 28 : 15) : 9,
       groundedAfterControl ? (standingSupport ? 6.8 : 3.1) : 2.3,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.elbowLeft.current,
       elbowLeftTarget,
       standingSupport ? 5.8 : 5.2,
       standingSupport ? 2.2 : 1.8,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.elbowRight.current,
       elbowRightTarget,
       standingSupport ? 5.8 : 5.2,
       standingSupport ? 2.2 : 1.8,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.wristLeft.current,
       wristLeftTarget,
       3.8,
       1.4,
     );
-    driveJointToPosition(
+    driveJoint(
       jointRefs.wristRight.current,
       wristRightTarget,
       3.8,
@@ -1717,12 +1768,36 @@ export function CharacterCtrlrActiveRagdollPlayer({
 
     if (debug) {
       if (typeof window !== "undefined") {
+        // One record per fixed physics step, so behaviour can be inspected at full rate even when
+        // the render loop is slow. Capped so a long session cannot grow without bound.
+        const trace = (
+          window as typeof window & {
+            __characterCtrlrActiveRagdollTrace?: Array<Record<string, unknown>>;
+          }
+        ).__characterCtrlrActiveRagdollTrace;
+        if (trace) {
+          const round = (value: number) => Math.round(value * 1000) / 1000;
+          trace.push({
+            pelvis: [round(rootPosition.x), round(rootPosition.y), round(rootPosition.z)],
+            vel: [round(currentVelocity.x), round(currentVelocity.y), round(currentVelocity.z)],
+            footL: [round(leftFootPos.x), round(leftFootPos.y), round(leftFootPos.z)],
+            footR: [round(rightFootPos.x), round(rightFootPos.y), round(rightFootPos.z)],
+            grounded: groundedAfterControl,
+            support: supportStateAfterJump,
+            recovery: recoveryState.mode,
+            standing: standingSupport,
+          });
+          if (trace.length > 6000) {
+            trace.splice(0, trace.length - 6000);
+          }
+        }
         (
           window as typeof window & {
             __characterCtrlrActiveRagdollDebug?: unknown;
           }
         ).__characterCtrlrActiveRagdollDebug = {
           ...locomotionDebugState,
+          pelvisPosition: [rootPosition.x, rootPosition.y, rootPosition.z],
           jointCalibrationReady: jointCalibrationReadyRef.current,
           jointCalibration: jointCalibrationRef.current,
           legJointAngles: liveLegJointAngles,
@@ -1882,6 +1957,7 @@ export function CharacterCtrlrActiveRagdollPlayer({
         bodyProps={articulatedBodyProps}
         bodyRefs={bodyRefs}
         debug={debug}
+        hideBodyVisuals={Boolean(characterModelUrl)}
         ignoreCameraOcclusion
         locomotionDebugRef={locomotionDebugRef}
         position={position}
@@ -1895,6 +1971,15 @@ export function CharacterCtrlrActiveRagdollPlayer({
           softCcdPrediction: 0.25,
         }}
       />
+      {characterModelUrl ? (
+        <Suspense fallback={null}>
+          <CharacterCtrlrRagdollSkin
+            bodyRefs={bodyRefs}
+            ignoreCameraOcclusion
+            url={characterModelUrl}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

@@ -7,6 +7,8 @@ export type SupportSide = "left" | "right";
 export type StandingFootPlant = {
   left: [number, number, number];
   right: [number, number, number];
+  /** Ankle-line XZ the stance was planted around; fixed until the stance is released. */
+  anchor: [number, number];
 };
 
 export type PhaseLimbPoseTargets = {

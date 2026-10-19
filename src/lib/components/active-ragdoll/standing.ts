@@ -112,25 +112,29 @@ export function advanceStandingFootPlant(params: {
     turnInPlaceRequested,
   } = params;
   const targetY = supportPlaneY + FOOT_SUPPORT_OFFSET;
+  // The stance is planted around an anchor captured once. Re-deriving targets from the feet's own
+  // current centre made them chase themselves forward by the forward offset every step.
+  const anchor: [number, number] = currentPlant?.anchor ?? [supportCenter[0], supportCenter[2]];
   const lateralX = Math.cos(facing) * STAND_FOOT_LATERAL_OFFSET;
   const lateralZ = -Math.sin(facing) * STAND_FOOT_LATERAL_OFFSET;
   const forwardX = Math.sin(facing) * STAND_FOOT_FORWARD_OFFSET;
   const forwardZ = Math.cos(facing) * STAND_FOOT_FORWARD_OFFSET;
   const targetLeft: CharacterCtrlrVec3 = [
-    supportCenter[0] - lateralX + forwardX,
+    anchor[0] - lateralX + forwardX,
     targetY,
-    supportCenter[2] - lateralZ + forwardZ,
+    anchor[1] - lateralZ + forwardZ,
   ];
   const targetRight: CharacterCtrlrVec3 = [
-    supportCenter[0] + lateralX + forwardX,
+    anchor[0] + lateralX + forwardX,
     targetY,
-    supportCenter[2] + lateralZ + forwardZ,
+    anchor[1] + lateralZ + forwardZ,
   ];
 
   if (!currentPlant) {
     return {
       left: targetLeft,
       right: targetRight,
+      anchor,
     } satisfies StandingFootPlant;
   }
 
@@ -147,5 +151,6 @@ export function advanceStandingFootPlant(params: {
       targetY,
       MathUtils.lerp(currentPlant.right[2], targetRight[2], positionBlend),
     ],
+    anchor,
   } satisfies StandingFootPlant;
 }

@@ -30,6 +30,9 @@ const DURATION_SECONDS = Number(ARGS.duration ?? 8);
 const SAMPLE_INTERVAL_MS = Number(ARGS.interval ?? 0.15) * 1000;
 const PORT = Number(ARGS.port ?? 5198);
 const PLAYER = ARGS.player ?? "ragdoll";
+// Optional push: --shove x,y,z (whole-body velocity change in m/s, z is forward) applied --shoveAt seconds in.
+const SHOVE = ARGS.shove ? String(ARGS.shove).split(",").map(Number) : null;
+const SHOVE_AT_SECONDS = Number(ARGS.shoveAt ?? 4);
 const DEV_URL = `http://127.0.0.1:${PORT}/?player=${PLAYER}&debug=1&scenario=${SCENARIO}`;
 const BASE_FLAGS = [
   "--headless=new",
@@ -196,7 +199,7 @@ function compactSample(debug) {
 async function main() {
   const devServer = spawn(
     "npm",
-    ["run", "dev", "--", "--port", String(PORT), "--strictPort"],
+    ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"],
     { detached: true, stdio: "ignore" },
   );
   const profileDir = mkdtempSync(join(tmpdir(), "character-ctrlr-probe-"));
@@ -253,7 +256,15 @@ async function main() {
       const startTime = Date.now();
       const samples = [];
       let lastRow = "";
+      let shoved = false;
       while (Date.now() - startTime < DURATION_SECONDS * 1000) {
+        if (SHOVE && !shoved && (Date.now() - startTime) / 1000 >= SHOVE_AT_SECONDS) {
+          shoved = true;
+          await cdp.send("Runtime.evaluate", {
+            expression: `window.__characterCtrlrActiveRagdollShove?.(${SHOVE.join(",")})`,
+          });
+          console.log(`-- shove ${SHOVE.join(",")} m/s --`);
+        }
         const result = await cdp.send("Runtime.evaluate", {
           expression:
             "JSON.stringify(window.__characterCtrlrActiveRagdollDebug ?? null)",
@@ -268,13 +279,7 @@ async function main() {
 
         if (debug) {
           const elapsed = (Date.now() - startTime) / 1000;
-          const supportCenter = debug.supportCenter ?? [];
-          const rootY =
-            debug.standingSupport && supportCenter[1] != null
-              ? supportCenter[1] + 1.9 - (debug.supportHeightError ?? 0)
-              : (debug.centerOfMass ?? [])[1] != null
-                ? debug.centerOfMass[1] + 0.215
-                : null;
+          const rootY = debug.pelvisPosition?.[1] ?? null;
           const annotated = { ...debug, __probeT: elapsed, __probeRootY: rootY };
           samples.push(annotated);
           const row = compactSample(annotated);
@@ -305,6 +310,28 @@ async function main() {
         await sleep(SAMPLE_INTERVAL_MS);
       }
 
+      // Fixed-step trace of the shove (the render loop is too slow to see it in the samples above).
+      if (SHOVE) {
+        const traceResult = await cdp.send("Runtime.evaluate", {
+          expression: "JSON.stringify(window.__characterCtrlrActiveRagdollTrace ?? [])",
+          returnByValue: true,
+        });
+        const trace = JSON.parse(traceResult.result?.value ?? "[]");
+        const markerIndex = trace.findIndex((entry) => entry.marker);
+        if (markerIndex >= 0) {
+          const first = trace[markerIndex - 1] ?? trace[markerIndex + 1];
+          console.log("\nshove trace (physics steps, 1/60 s each; every 6th):");
+          console.log("step  pelvis xyz            vel xyz              support  grounded recovery");
+          for (let i = markerIndex - 1; i < Math.min(trace.length, markerIndex + 240); i += 6) {
+            const e = trace[i];
+            if (!e.pelvis) continue;
+            console.log(
+              `${String(i - markerIndex).padStart(4)}  ${e.pelvis.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${e.vel.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${String(e.support).padEnd(7)} ${e.grounded ? "Y" : "N"}        ${e.recovery}`,
+            );
+          }
+        }
+      }
+
       // Verdict.
       if (samples.length === 0) {
         console.log("\nVERDICT: no debug samples captured");
@@ -331,7 +358,14 @@ async function main() {
       console.log(`grounded ratio: ${(groundedRatio * 100).toFixed(1)}%`);
       console.log(`double-support ratio: ${(doubleRatio * 100).toFixed(1)}%`);
       console.log(`fallen samples: ${fallenSamples} (${(fallenSamples / samples.length * 100).toFixed(0)}%)`);
-      console.log(`min pelvis y: ${minRootY.toFixed(2)}m (stand target 1.90m)`);
+      console.log(`min pelvis y: ${minRootY.toFixed(2)}m (stand height 1.98m)`);
+      const positioned = samples.filter((s) => s.pelvisPosition);
+      if (positioned.length > 1) {
+        const first = positioned[0].pelvisPosition;
+        const last = positioned[positioned.length - 1].pelvisPosition;
+        const drift = (p) => Math.hypot(p[0] - first[0], p[2] - first[2]);
+        console.log(`pelvis drift: max ${Math.max(...positioned.map((s) => drift(s.pelvisPosition))).toFixed(2)}m, final ${drift(last).toFixed(2)}m`);
+      }
       console.log(`worst capture urgency: ${worstUrgency.toFixed(2)}`);
       console.log(`warnings: ${JSON.stringify(warningCounts)}`);
       console.log(`final state: grounded=${lastSample.grounded} support=${lastSample.supportState} recovery=${lastSample.recoveryState} mode=${lastSample.movementMode} hErr=${(lastSample.supportHeightError ?? 0).toFixed(3)}`);
