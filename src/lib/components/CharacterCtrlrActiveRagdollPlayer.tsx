@@ -1789,6 +1789,8 @@ export function CharacterCtrlrActiveRagdollPlayer({
         if (trace) {
           const round = (value: number) => Math.round(value * 1000) / 1000;
           trace.push({
+            t: round(simulatedTimeRef.current),
+            phase: gaitState.phase,
             pelvis: [round(rootPosition.x), round(rootPosition.y), round(rootPosition.z)],
             vel: [round(currentVelocity.x), round(currentVelocity.y), round(currentVelocity.z)],
             footL: [round(leftFootPos.x), round(leftFootPos.y), round(leftFootPos.z)],
@@ -1797,6 +1799,23 @@ export function CharacterCtrlrActiveRagdollPlayer({
             support: supportStateAfterJump,
             recovery: recoveryState.mode,
             standing: standingSupport,
+            // Leg joints as [hipL, hipR, kneeL, kneeR, ankleL, ankleR]: measured, then targets.
+            legs: [
+              liveLegJointAngles.hipLeft,
+              liveLegJointAngles.hipRight,
+              liveLegJointAngles.kneeLeft,
+              liveLegJointAngles.kneeRight,
+              liveLegJointAngles.ankleLeft,
+              liveLegJointAngles.ankleRight,
+            ].map(round),
+            legTargets: [
+              hipLeftTarget,
+              hipRightTarget,
+              kneeLeftTarget,
+              kneeRightTarget,
+              ankleLeftTarget,
+              ankleRightTarget,
+            ].map(round),
           });
           if (trace.length > 6000) {
             trace.splice(0, trace.length - 6000);

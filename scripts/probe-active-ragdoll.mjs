@@ -9,7 +9,8 @@
 // Usage:
 //   node scripts/probe-active-ragdoll.mjs [--scenario spawn_idle_stability]
 //       [--duration 8] [--interval 0.15] [--port 5199] [--player ragdoll]
-//       [--shove x,y,z] [--shoveAt 4] [--query key=value&key2=value2]
+//       [--shove x,y,z] [--shoveAt 4] [--dumpAt 5] [--trace 1.8,3.2] [--traceStride 6]
+//       [--query key=value&key2=value2]
 //
 // --duration, --shoveAt and the t column are simulated seconds, not wall-clock seconds.
 // Exit code 0 means the probe ran (regardless of pass/fail verdict).
@@ -35,6 +36,14 @@ const PLAYER = ARGS.player ?? "ragdoll";
 // Optional push: --shove x,y,z (whole-body velocity change in m/s, z is forward) applied --shoveAt seconds in.
 const SHOVE = ARGS.shove ? String(ARGS.shove).split(",").map(Number) : null;
 const SHOVE_AT_SECONDS = Number(ARGS.shoveAt ?? 4);
+// Optional: print the full controller debug state at the first sample at or after --dumpAt seconds.
+// Optional: print the per-physics-step trace between two simulated times, e.g. --trace 1.8,3.2.
+const TRACE_WINDOW = ARGS.trace ? String(ARGS.trace).split(",").map(Number) : null;
+// With --traceJoints, trace rows also print measured and target leg joint angles.
+const TRACE_JOINTS = Boolean(ARGS.traceJoints);
+// Physics steps between printed rows of the shove trace.
+const TRACE_STRIDE = Number(ARGS.traceStride ?? 6);
+const DUMP_AT_SECONDS = ARGS.dumpAt != null ? Number(ARGS.dumpAt) : null;
 // Extra URL parameters for the demo, e.g. --query skin=boxes or --query arena=flat&skin=boxes.
 const EXTRA_QUERY = ARGS.query ? `&${ARGS.query}` : "";
 const DEV_URL = `http://127.0.0.1:${PORT}/?player=${PLAYER}&debug=1&scenario=${SCENARIO}${EXTRA_QUERY}`;
@@ -261,6 +270,7 @@ async function main() {
       const samples = [];
       let lastRow = "";
       let shoved = false;
+      let dumped = false;
       // --duration and --shoveAt count simulated seconds; headless rendering can run the physics
       // far slower than real time. The wall-clock cap only guards against a stalled page.
       let simulatedSeconds = 0;
@@ -275,7 +285,7 @@ async function main() {
         }
         const result = await cdp.send("Runtime.evaluate", {
           expression:
-            "JSON.stringify(window.__characterCtrlrActiveRagdollDebug ?? null)",
+            "JSON.stringify(window.__characterCtrlrActiveRagdollDebug ? { ...window.__characterCtrlrActiveRagdollDebug, scenarioElapsed: window.__characterCtrlrValidation?.elapsed ?? null } : null)",
           returnByValue: true,
         });
         let debug = null;
@@ -296,6 +306,11 @@ async function main() {
             __probeRootY: rootY,
           };
           samples.push(annotated);
+          if (DUMP_AT_SECONDS != null && !dumped && simulatedSeconds >= DUMP_AT_SECONDS) {
+            dumped = true;
+            console.log(`-- debug state at t=${simulatedSeconds.toFixed(2)}s --`);
+            console.log(JSON.stringify(debug, null, 1));
+          }
           const row = compactSample(annotated);
           const rowString = [
             row.t.padStart(4),
@@ -324,6 +339,30 @@ async function main() {
         await sleep(SAMPLE_INTERVAL_MS);
       }
 
+      if (TRACE_WINDOW) {
+        const traceResult = await cdp.send("Runtime.evaluate", {
+          expression: "JSON.stringify(window.__characterCtrlrActiveRagdollTrace ?? [])",
+          returnByValue: true,
+        });
+        const trace = JSON.parse(traceResult.result?.value ?? "[]");
+        const [from, to] = TRACE_WINDOW;
+        console.log(`\ntrace ${from}s-${to}s (every ${TRACE_STRIDE} physics steps):`);
+        console.log("t      phase           pelvis xyz            vel xyz              footL y/z     footR y/z     support  gnd recovery");
+        const rows = trace.filter((e) => e.pelvis && e.t >= from && e.t <= to);
+        for (let i = 0; i < rows.length; i += TRACE_STRIDE) {
+          const e = rows[i];
+          const v3 = (values) => values.map((v) => v.toFixed(2).padStart(6)).join(" ");
+          const yz = (values) => [values[1], values[2]].map((v) => v.toFixed(2).padStart(5)).join(" ");
+          console.log(
+            `${e.t.toFixed(2).padStart(6)} ${String(e.phase).padEnd(15)} ${v3(e.pelvis)}   ${v3(e.vel)}   ${yz(e.footL)}   ${yz(e.footR)}   ${String(e.support).padEnd(7)}  ${e.grounded ? "Y" : "N"}  ${e.recovery}`,
+          );
+          if (TRACE_JOINTS && e.legs) {
+            const joints = (values) => values.map((v) => v.toFixed(2).padStart(5)).join(" ");
+            console.log(`         legs hL hR kL kR aL aR ${joints(e.legs)}   targets ${joints(e.legTargets)}`);
+          }
+        }
+      }
+
       // Fixed-step trace of the shove (the render loop is too slow to see it in the samples above).
       if (SHOVE) {
         const traceResult = await cdp.send("Runtime.evaluate", {
@@ -334,13 +373,13 @@ async function main() {
         const markerIndex = trace.findIndex((entry) => entry.marker);
         if (markerIndex >= 0) {
           const first = trace[markerIndex - 1] ?? trace[markerIndex + 1];
-          console.log("\nshove trace (physics steps, 1/60 s each; every 6th):");
-          console.log("step  pelvis xyz            vel xyz              support  grounded recovery");
-          for (let i = markerIndex - 1; i < Math.min(trace.length, markerIndex + 240); i += 6) {
+          console.log(`\nshove trace (physics steps, 1/60 s each; every ${TRACE_STRIDE}):`);
+          console.log("step  pelvis xyz            vel xyz              footL y/z     footR y/z     support  grounded recovery");
+          for (let i = markerIndex - 1; i < Math.min(trace.length, markerIndex + 240); i += TRACE_STRIDE) {
             const e = trace[i];
             if (!e.pelvis) continue;
             console.log(
-              `${String(i - markerIndex).padStart(4)}  ${e.pelvis.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${e.vel.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${String(e.support).padEnd(7)} ${e.grounded ? "Y" : "N"}        ${e.recovery}`,
+              `${String(i - markerIndex).padStart(4)}  ${e.pelvis.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${e.vel.map((v) => v.toFixed(2).padStart(6)).join(" ")}   ${[e.footL[1], e.footL[2]].map((v) => v.toFixed(2).padStart(5)).join(" ")}   ${[e.footR[1], e.footR[2]].map((v) => v.toFixed(2).padStart(5)).join(" ")}   ${String(e.support).padEnd(7)} ${e.grounded ? "Y" : "N"}        ${e.recovery}`,
             );
           }
         }
@@ -384,6 +423,9 @@ async function main() {
         const wallSeconds = lastSample.__probeWall;
         const ratio = lastSample.simulatedTime / Math.max(wallSeconds, 1e-6);
         console.log(`simulated time: ${lastSample.simulatedTime.toFixed(2)}s over ${wallSeconds.toFixed(2)}s wall (${(ratio * 100).toFixed(0)}% real time)`);
+        if (lastSample.scenarioElapsed != null) {
+          console.log(`scenario clock: ${lastSample.scenarioElapsed.toFixed(2)}s`);
+        }
       }
       console.log(`worst capture urgency: ${worstUrgency.toFixed(2)}`);
       console.log(`warnings: ${JSON.stringify(warningCounts)}`);
