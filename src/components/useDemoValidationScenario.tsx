@@ -172,7 +172,9 @@ export function DemoValidationPusher(props: {
       restitution={0}
       type={"dynamic" satisfies RigidBodyProps["type"]}
     >
-      <CuboidCollider args={[0.22, 0.22, 0.22]} />
+      {/* Default density made this box weigh ~0.09 kg, which never moved the 13.7 kg ragdoll.
+          3 kg at 4.8 m/s is ~14 N*s. */}
+      <CuboidCollider args={[0.22, 0.22, 0.22]} mass={3} />
       <mesh castShadow receiveShadow>
         <boxGeometry args={[0.44, 0.44, 0.44]} />
         <meshStandardMaterial color="#d34e36" roughness={0.5} />

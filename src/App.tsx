@@ -8,6 +8,7 @@ import { Lights } from "./components/Lights";
 import { DemoBoxmanPlayer } from "./components/DemoBoxmanPlayer";
 import { DemoPlanetBackdrop } from "./components/DemoPlanetBackdrop";
 import { DemoPlanetCamera } from "./components/DemoPlanetCamera";
+import { RigTestScene } from "./components/RigTestScene";
 import { TerrainArena } from "./components/TerrainArena";
 import { TerrainChunkManager } from "./components/TerrainChunkManager";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./components/useDemoPhysicsDebugControls";
 import {
   CharacterCtrlrActiveRagdollPlayer,
+  CharacterCtrlrCameraRig,
   type CharacterCtrlrMixamoMotionSource,
   CharacterCtrlrProvider,
   CharacterCtrlrRagdollDummy,
@@ -43,6 +45,11 @@ const DEMO_ARENA_MODE =
   new URLSearchParams(window.location.search).get("arena") === "flat"
     ? "flat"
     : "planet";
+// The ragdoll is drawn with public/assets/character.glb; ?skin=boxes shows the coloured collider boxes.
+const DEMO_RAGDOLL_MODEL =
+  new URLSearchParams(window.location.search).get("skin") === "boxes"
+    ? undefined
+    : "/assets/character.glb";
 const DEMO_MOTION_MODE =
   new URLSearchParams(window.location.search).get("motion") === "mixamo"
     ? "mixamo"
@@ -133,7 +140,13 @@ function DemoScene() {
     <>
       {DEMO_DEBUG ? <KeyRibbon /> : null}
       <Canvas
-        camera={{ fov: 42, near: 0.1, far: 250, position: [0, 3.5, 8] }}
+        camera={{
+          fov: 42,
+          near: 0.1,
+          far: 250,
+          // The ragdoll is ~3.7 m tall, so it needs a longer shot than the boxman.
+          position: DEMO_PLAYER_MODE === "ragdoll" ? [4, 3.2, 15] : [0, 3.5, 8],
+        }}
         gl={{ antialias: true }}
         shadows
       >
@@ -179,6 +192,7 @@ function DemoScene() {
               {DEMO_PLAYER_MODE === "ragdoll" ? (
               <CharacterCtrlrActiveRagdollPlayer
                 controls="keyboard"
+                characterModelUrl={DEMO_RAGDOLL_MODEL}
                 debug={DEMO_DEBUG}
                 inputRef={activeInputRef}
                 mixamoSource={DEMO_MIXAMO_SOURCE}
@@ -202,13 +216,29 @@ function DemoScene() {
               ) : null}
             </Physics>
           )}
+          {DEMO_PLAYER_MODE === "ragdoll" && !USE_PLANET_DEMO ? (
+            // Third-person camera: click the canvas to capture the mouse, move it to orbit, Esc to
+            // release. Offsets are scaled up for the ~3.7 m ragdoll.
+            <CharacterCtrlrCameraRig
+              collisionPadding={0.5}
+              followOffset={[0, 2.6, 11]}
+              minCollisionDistance={4}
+            />
+          ) : null}
         </Suspense>
       </Canvas>
     </>
   );
 }
 
+const DEMO_RIG_VIEW =
+  new URLSearchParams(window.location.search).get("view") === "rig";
+
 export default function App() {
+  if (DEMO_RIG_VIEW) {
+    return <RigTestScene />;
+  }
+
   return (
     <CharacterCtrlrProvider initialState={{ playerPosition: DEMO_PLAYER_POSITION }}>
       <DemoScene />
