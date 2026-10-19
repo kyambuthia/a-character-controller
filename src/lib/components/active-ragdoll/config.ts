@@ -28,6 +28,12 @@ export const GROUND_PROBE_NORMAL_MIN_Y = 0.35;
 export const SUPPORT_CONTACT_CONFIRM_DURATION = 0.045;
 export const STAND_BOOTSTRAP_SETTLE_DURATION = 0.25;
 export const MIXAMO_CONTROL_ENABLED = false;
+// Swing-leg motor gains ([stiffness, damping], player tuning units). The walking gains are
+// overdamped (damping/stiffness ~0.2 s), too slow for a ~0.3 s swing: the knee never bent and the
+// foot shuffled. A stiffer, lighter-damped swing leg clears the ground (see scripts/sim-swing.mts).
+export const SWING_HIP_GAINS: [number, number] = [100, 8];
+export const SWING_KNEE_GAINS: [number, number] = [120, 8];
+
 export const MIN_GAIT_PHASE_HOLD = 0.05;
 
 export const REVOLUTE_JOINT_LIMITS = Object.fromEntries(
@@ -171,7 +177,7 @@ export const GAIT_CONFIGS: Record<
       pelvisRoll: [0.03, 0.09],
       shoulderDrive: [0.16, 0.4],
       elbowDrive: [0.04, 0.18],
-      swingKnee: [0.18, 0.48],
+      swingKnee: [0.7, 1.1],
       swingAnkle: [0.08, 0.22],
     },
   },

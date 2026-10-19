@@ -56,6 +56,8 @@ import {
   STAND_FOOT_FORWARD_OFFSET,
   STAND_FOOT_LATERAL_OFFSET,
   STAND_PELVIS_HEIGHT,
+  SWING_HIP_GAINS,
+  SWING_KNEE_GAINS,
   STAND_SEGMENT_MAX_TORQUE,
 } from "./active-ragdoll/config";
 import {
@@ -1542,18 +1544,30 @@ export function CharacterCtrlrActiveRagdollPlayer({
       ankleRight: sampleRevoluteJointAngle(lowerLegRight, rightFoot),
     };
 
-    driveJoint(
-      jointRefs.hipLeft.current,
-      hipLeftTarget,
-      groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
-      groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
-    );
-    driveJoint(
-      jointRefs.hipRight.current,
-      hipRightTarget,
-      groundedAfterControl ? (standingSupport ? 34 : 20) : 11,
-      groundedAfterControl ? (standingSupport ? 7.8 : 4.4) : 2.8,
-    );
+    // The swing leg gets its own stiffer gains during a commanded stance phase.
+    const swingLegActive =
+      groundedAfterControl
+      && locomotionCommandActive
+      && (gaitState.phase === "left-stance" || gaitState.phase === "right-stance");
+    const legGains = (
+      side: SupportSide,
+      swingGains: [number, number],
+      standing: [number, number],
+      walking: [number, number],
+      airborne: [number, number],
+    ): [number, number] =>
+      swingLegActive && swingSide === side
+        ? swingGains
+        : groundedAfterControl
+          ? (standingSupport ? standing : walking)
+          : airborne;
+    const hipLeftGains = legGains("left", SWING_HIP_GAINS, [34, 7.8], [20, 4.4], [11, 2.8]);
+    const hipRightGains = legGains("right", SWING_HIP_GAINS, [34, 7.8], [20, 4.4], [11, 2.8]);
+    const kneeLeftGains = legGains("left", SWING_KNEE_GAINS, [44, 9.5], [22, 4.2], [14, 3]);
+    const kneeRightGains = legGains("right", SWING_KNEE_GAINS, [44, 9.5], [22, 4.2], [14, 3]);
+
+    driveJoint(jointRefs.hipLeft.current, hipLeftTarget, ...hipLeftGains);
+    driveJoint(jointRefs.hipRight.current, hipRightTarget, ...hipRightGains);
     driveJoint(
       jointRefs.shoulderLeft.current,
       shoulderLeftTarget,
@@ -1566,18 +1580,8 @@ export function CharacterCtrlrActiveRagdollPlayer({
       standingSupport ? 9.2 : 8.4,
       standingSupport ? 2.8 : 2.2,
     );
-    driveJoint(
-      jointRefs.kneeLeft.current,
-      kneeLeftTarget,
-      groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
-      groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
-    );
-    driveJoint(
-      jointRefs.kneeRight.current,
-      kneeRightTarget,
-      groundedAfterControl ? (standingSupport ? 44 : 22) : 14,
-      groundedAfterControl ? (standingSupport ? 9.5 : 4.2) : 3,
-    );
+    driveJoint(jointRefs.kneeLeft.current, kneeLeftTarget, ...kneeLeftGains);
+    driveJoint(jointRefs.kneeRight.current, kneeRightTarget, ...kneeRightGains);
     driveJoint(
       jointRefs.ankleLeft.current,
       ankleLeftTarget,
