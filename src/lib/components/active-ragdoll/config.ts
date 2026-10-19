@@ -133,7 +133,7 @@ export const GAIT_CONFIGS: Record<
       airborne: 0.12,
     },
     step: {
-      length: [0.22, 0.54],
+      length: [0.45, 1.0],
       width: [0.2, 0.24],
       height: [0.08, 0.2],
       pelvisLeadScale: [0.32, 0.44],

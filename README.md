@@ -11,7 +11,7 @@ Measured in the browser with `scripts/probe-active-ragdoll.mjs` (see below):
 | Scenario | Result |
 | --- | --- |
 | `spawn_idle_stability` | stands indefinitely; absorbs a 1.5 m/s whole-body push and settles |
-| `steady_forward_walk` | 0.57 m/s, ~25 cm foot clearance, no falls; stops and stands when the key is released |
+| `steady_forward_walk` | 0.63 m/s, ~25 cm foot clearance, no falls; stops and stands when the key is released |
 | `steady_forward_run` | 0.77 m/s, no falls (not yet a real run) |
 | `steady_crouch_walk` | 0.15 m/s at a 1.42 m crouch, no falls |
 | `turn_in_place_stability` | no falls, but reports `unstable_yaw` while turning |
@@ -82,7 +82,7 @@ What is not finished yet:
 
 Standing and slow walking work (see WIP above). Still open:
 
-- walking is slow (0.57 m/s against a 2.7 m/s command) and running is barely faster than walking
+- walking is slow (0.63 m/s against a 2.7 m/s command) and running is barely faster than walking
 - turning in place reports `unstable_yaw`; turning while walking has not been tuned
 - the rig is rotation-locked, so lateral balance and torso tilt are not actually being controlled
 - locomotion still leans on world-space impulse assists (pelvis height/centring, foot planting, swing-foot placement) on top of the joint motors
