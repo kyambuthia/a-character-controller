@@ -62,6 +62,7 @@ import {
 } from "./active-ragdoll/config";
 import {
   addSupportContact as trackSupportContact,
+  measureContactSupport,
   createInitialContactTrackingState,
   deriveConfirmedSupportState,
   removeSupportContact as untrackSupportContact,
@@ -266,10 +267,9 @@ export function CharacterCtrlrActiveRagdollPlayer({
 
   const createGroundContactEnterHandler =
     (side: SupportSide) => (payload: CollisionEnterPayload) => {
-      const normal = payload.manifold.normal();
-      const supportY = payload.flipped ? normal.y : -normal.y;
+      const supportY = measureContactSupport(world, payload.target.collider, payload.other.collider);
 
-      if (supportY < 0.2) {
+      if (supportY === null || supportY < 0.2) {
         return;
       }
 

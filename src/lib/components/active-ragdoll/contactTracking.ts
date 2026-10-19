@@ -174,3 +174,37 @@ export function deriveConfirmedSupportState(
 
   return fallbackSupportState;
 }
+
+type ContactPairQuery<TCollider> = {
+  contactPair: (
+    collider1: TCollider,
+    collider2: TCollider,
+    callback: (manifold: { normal: () => { y: number } }, flipped: boolean) => void,
+  ) => void;
+};
+
+/**
+ * How much a contact pushes `self` upward (1 = flat ground underneath), or null when the pair has
+ * no contact manifold.
+ *
+ * The pair is queried with `self` first so the normal's direction is known. Collision event
+ * payloads cannot be used for this: @react-three/rapier hands both colliders the same manifold
+ * and `flipped` flag, so the sign depends on which collider Rapier listed first. The old handler
+ * negated the normal unconditionally, which rejected every ground contact.
+ */
+export function measureContactSupport<TCollider>(
+  world: ContactPairQuery<TCollider>,
+  self: TCollider,
+  other: TCollider,
+) {
+  let support: number | null = null;
+
+  world.contactPair(self, other, (manifold, flipped) => {
+    // Unflipped, the normal points from `self` into `other`; flipped, from `other` into `self`.
+    const normalY = manifold.normal().y;
+    const upward = flipped ? normalY : -normalY;
+    support = support === null ? upward : Math.max(support, upward);
+  });
+
+  return support;
+}
