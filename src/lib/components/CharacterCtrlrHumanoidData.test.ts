@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHARACTER_CTRLR_HUMANOID_BODY_DEFINITIONS,
   CHARACTER_CTRLR_HUMANOID_JOINT_DEFINITIONS,
+  deriveCharacterCtrlrHumanoidBodyDensity,
 } from "./CharacterCtrlrHumanoidData";
 
 describe("CHARACTER_CTRLR_HUMANOID_JOINT_DEFINITIONS", () => {
@@ -47,5 +48,33 @@ describe("CHARACTER_CTRLR_HUMANOID_JOINT_DEFINITIONS", () => {
     const headBottom = head.position[1] - head.shape.radius;
 
     expect(headBottom - chestTop).toBeGreaterThanOrEqual(0.03);
+  });
+});
+
+describe("deriveCharacterCtrlrHumanoidBodyDensity", () => {
+  it("gives each auto-generated collider its body's defined mass", async () => {
+    // Build the collider exactly as @react-three/rapier's auto-collider would (the shape's own box
+    // or sphere) with the derived density, and read back Rapier's mass.
+    const RAPIER = (await import("@dimforge/rapier3d-compat")).default;
+    await RAPIER.init();
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+
+    for (const definition of CHARACTER_CTRLR_HUMANOID_BODY_DEFINITIONS) {
+      expect(definition.collider).toBe(definition.shape.kind === "sphere" ? "ball" : "cuboid");
+      const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic());
+      const desc =
+        definition.shape.kind === "sphere"
+          ? RAPIER.ColliderDesc.ball(definition.shape.radius)
+          : RAPIER.ColliderDesc.cuboid(
+              definition.shape.size[0] / 2,
+              definition.shape.size[1] / 2,
+              definition.shape.size[2] / 2,
+            );
+      world.createCollider(desc.setDensity(deriveCharacterCtrlrHumanoidBodyDensity(definition)), body);
+
+      expect(body.mass(), definition.key).toBeCloseTo(definition.mass, 3);
+    }
+
+    world.free();
   });
 });

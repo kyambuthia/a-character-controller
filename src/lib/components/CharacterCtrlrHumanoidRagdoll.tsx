@@ -29,6 +29,7 @@ import {
   CHARACTER_CTRLR_HUMANOID_JOINT_DEFINITIONS,
   CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS,
   CHARACTER_CTRLR_HUMANOID_SPHERICAL_JOINT_DEFINITIONS,
+  deriveCharacterCtrlrHumanoidBodyDensity,
   type CharacterCtrlrHumanoidBodyDefinition,
   type CharacterCtrlrHumanoidBodyKey,
   type CharacterCtrlrHumanoidBodyRefs,
@@ -43,7 +44,7 @@ const RAGDOLL_COLLISION_GROUPS = interactionGroups([1], [0]);
 
 type CharacterCtrlrHumanoidBodyOverrides = Omit<
   ComponentProps<typeof RigidBody>,
-  "children" | "ref" | "position" | "colliders" | "mass"
+  "children" | "ref" | "position" | "colliders" | "mass" | "density"
 >;
 
 export type CharacterCtrlrHumanoidRagdollProps = {
@@ -130,7 +131,7 @@ function HumanoidRigidBody({
       {...bodyProps}
       ref={bodyRef}
       colliders={definition.collider}
-      mass={definition.mass}
+      density={deriveCharacterCtrlrHumanoidBodyDensity(definition)}
       position={definition.position}
     >
       <HumanoidBodyVisual

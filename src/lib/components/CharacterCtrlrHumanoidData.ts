@@ -409,6 +409,25 @@ export const CHARACTER_CTRLR_HUMANOID_JOINT_DEFINITIONS: CharacterCtrlrHumanoidJ
   ...CHARACTER_CTRLR_HUMANOID_REVOLUTE_JOINT_DEFINITIONS,
 ];
 
+/**
+ * Collider density that gives a body its defined mass.
+ *
+ * @react-three/rapier ignores a RigidBody's `mass` prop when it builds auto-colliders (it strips it
+ * before creating them), so every body silently used density 1 and the whole ragdoll weighed
+ * about 0.9 kg instead of ~14 kg. `density` is passed through to auto-colliders, so the mass is set
+ * that way instead. The collider is the shape's own box or sphere.
+ */
+export function deriveCharacterCtrlrHumanoidBodyDensity(
+  definition: Pick<CharacterCtrlrHumanoidBodyDefinition, "mass" | "shape">,
+) {
+  const volume =
+    definition.shape.kind === "sphere"
+      ? (4 / 3) * Math.PI * definition.shape.radius ** 3
+      : definition.shape.size[0] * definition.shape.size[1] * definition.shape.size[2];
+
+  return definition.mass / volume;
+}
+
 export function createCharacterCtrlrHumanoidBodyRefs(): CharacterCtrlrHumanoidBodyRefs {
   return {
     pelvis: createRef<RapierRigidBody>(),
