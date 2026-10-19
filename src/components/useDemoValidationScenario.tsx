@@ -3,12 +3,9 @@ import {
   RigidBody,
   type RapierRigidBody,
   type RigidBodyProps,
+  useBeforePhysicsStep,
 } from "@react-three/rapier";
-import {
-  useEffect,
-  useRef,
-  type MutableRefObject,
-} from "react";
+import { useRef, type MutableRefObject } from "react";
 import {
   DEFAULT_CHARACTER_CTRLR_INPUT,
   type CharacterCtrlrInputState,
@@ -64,53 +61,54 @@ function deriveScenarioInput(
   }
 }
 
-export function useDemoValidationScenario() {
-  const inputRef = useRef<CharacterCtrlrInputState | null>(null);
+export type DemoValidationScenario = {
+  scenario: string | null;
+  inputRef: MutableRefObject<CharacterCtrlrInputState | null>;
+  /** Simulated seconds since the scenario started (advanced by DemoValidationClock). */
+  elapsedRef: MutableRefObject<number>;
+};
+
+export function useDemoValidationScenario(): DemoValidationScenario {
+  const inputRef = useRef<CharacterCtrlrInputState | null>(
+    DEMO_VALIDATION_SCENARIO ? deriveScenarioInput(DEMO_VALIDATION_SCENARIO, 0) : null,
+  );
   const elapsedRef = useRef(0);
-
-  useEffect(() => {
-    if (!DEMO_VALIDATION_SCENARIO) {
-      inputRef.current = null;
-      return;
-    }
-
-    let frameHandle = 0;
-    const startTime = performance.now();
-
-    const update = () => {
-      elapsedRef.current = (performance.now() - startTime) / 1000;
-      inputRef.current = deriveScenarioInput(
-        DEMO_VALIDATION_SCENARIO,
-        elapsedRef.current,
-      );
-
-      if (typeof window !== "undefined") {
-        (
-          window as typeof window & {
-            __characterCtrlrValidation?: unknown;
-          }
-        ).__characterCtrlrValidation = {
-          scenario: DEMO_VALIDATION_SCENARIO,
-          elapsed: elapsedRef.current,
-          input: inputRef.current,
-        };
-      }
-
-      frameHandle = window.requestAnimationFrame(update);
-    };
-
-    update();
-
-    return () => {
-      window.cancelAnimationFrame(frameHandle);
-    };
-  }, []);
 
   return {
     scenario: DEMO_VALIDATION_SCENARIO,
     inputRef,
     elapsedRef,
   };
+}
+
+/**
+ * Advances the validation scenario once per physics step, inside <Physics>. The scenario runs on
+ * simulated time rather than wall time so a slow render loop (e.g. headless Chrome on a software
+ * renderer, which can fall to under a third of real time) cannot shorten its input windows.
+ */
+export function DemoValidationClock({ validation }: { validation: DemoValidationScenario }) {
+  const { scenario, inputRef, elapsedRef } = validation;
+
+  useBeforePhysicsStep((world) => {
+    if (!scenario) {
+      return;
+    }
+
+    elapsedRef.current += world.timestep;
+    inputRef.current = deriveScenarioInput(scenario, elapsedRef.current);
+
+    (
+      window as typeof window & {
+        __characterCtrlrValidation?: unknown;
+      }
+    ).__characterCtrlrValidation = {
+      scenario,
+      elapsed: elapsedRef.current,
+      input: inputRef.current,
+    };
+  });
+
+  return null;
 }
 
 export function DemoValidationPusher(props: {
@@ -122,42 +120,28 @@ export function DemoValidationPusher(props: {
   const playerPosition = useCharacterCtrlrStore((state) => state.playerPosition);
   const launchedRef = useRef(false);
 
-  useEffect(() => {
-    if (scenario !== "mild_push_recovery") {
-      launchedRef.current = false;
+  useBeforePhysicsStep(() => {
+    if (scenario !== "mild_push_recovery" || launchedRef.current || elapsedRef.current < 3.2) {
       return;
     }
 
-    const interval = window.setInterval(() => {
-      if (launchedRef.current || elapsedRef.current < 3.2) {
-        return;
-      }
+    const body = bodyRef.current;
+    if (!body) {
+      return;
+    }
 
-      const body = bodyRef.current;
-      if (!body) {
-        return;
-      }
-
-      launchedRef.current = true;
-      body.setTranslation(
-        {
-          x: playerPosition[0] + 1.6,
-          y: playerPosition[1] + 0.8,
-          z: playerPosition[2] - 3.6,
-        },
-        true,
-      );
-      body.setLinvel(
-        { x: -1.2, y: 0.2, z: 4.8 },
-        true,
-      );
-      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    }, 50);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [elapsedRef, playerPosition, scenario]);
+    launchedRef.current = true;
+    body.setTranslation(
+      {
+        x: playerPosition[0] + 1.6,
+        y: playerPosition[1] + 0.8,
+        z: playerPosition[2] - 3.6,
+      },
+      true,
+    );
+    body.setLinvel({ x: -1.2, y: 0.2, z: 4.8 }, true);
+    body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  });
 
   if (scenario !== "mild_push_recovery") {
     return null;

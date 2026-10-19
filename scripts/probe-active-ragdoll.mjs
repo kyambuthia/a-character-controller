@@ -11,6 +11,7 @@
 //       [--duration 8] [--interval 0.15] [--port 5199] [--player ragdoll]
 //       [--shove x,y,z] [--shoveAt 4] [--query key=value&key2=value2]
 //
+// --duration, --shoveAt and the t column are simulated seconds, not wall-clock seconds.
 // Exit code 0 means the probe ran (regardless of pass/fail verdict).
 
 import { spawn } from "node:child_process";
@@ -260,8 +261,12 @@ async function main() {
       const samples = [];
       let lastRow = "";
       let shoved = false;
-      while (Date.now() - startTime < DURATION_SECONDS * 1000) {
-        if (SHOVE && !shoved && (Date.now() - startTime) / 1000 >= SHOVE_AT_SECONDS) {
+      // --duration and --shoveAt count simulated seconds; headless rendering can run the physics
+      // far slower than real time. The wall-clock cap only guards against a stalled page.
+      let simulatedSeconds = 0;
+      const wallCapMs = Math.max(60_000, DURATION_SECONDS * 15_000);
+      while (simulatedSeconds < DURATION_SECONDS && Date.now() - startTime < wallCapMs) {
+        if (SHOVE && !shoved && simulatedSeconds >= SHOVE_AT_SECONDS) {
           shoved = true;
           await cdp.send("Runtime.evaluate", {
             expression: `window.__characterCtrlrActiveRagdollShove?.(${SHOVE.join(",")})`,
@@ -281,9 +286,15 @@ async function main() {
         }
 
         if (debug) {
-          const elapsed = (Date.now() - startTime) / 1000;
+          const wallElapsed = (Date.now() - startTime) / 1000;
+          simulatedSeconds = debug.simulatedTime ?? wallElapsed;
           const rootY = debug.pelvisPosition?.[1] ?? null;
-          const annotated = { ...debug, __probeT: elapsed, __probeRootY: rootY };
+          const annotated = {
+            ...debug,
+            __probeT: simulatedSeconds,
+            __probeWall: wallElapsed,
+            __probeRootY: rootY,
+          };
           samples.push(annotated);
           const row = compactSample(annotated);
           const rowString = [
@@ -370,7 +381,7 @@ async function main() {
         console.log(`pelvis drift: max ${Math.max(...positioned.map((s) => drift(s.pelvisPosition))).toFixed(2)}m, final ${drift(last).toFixed(2)}m`);
       }
       if (lastSample.simulatedTime != null) {
-        const wallSeconds = lastSample.__probeT;
+        const wallSeconds = lastSample.__probeWall;
         const ratio = lastSample.simulatedTime / Math.max(wallSeconds, 1e-6);
         console.log(`simulated time: ${lastSample.simulatedTime.toFixed(2)}s over ${wallSeconds.toFixed(2)}s wall (${(ratio * 100).toFixed(0)}% real time)`);
       }

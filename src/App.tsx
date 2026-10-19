@@ -20,6 +20,7 @@ import {
 } from "./components/demoTerrain";
 import { useDemoTouchInput } from "./components/useDemoTouchInput";
 import {
+  DemoValidationClock,
   DemoValidationPusher,
   useDemoValidationScenario,
 } from "./components/useDemoValidationScenario";
@@ -160,6 +161,7 @@ function DemoScene() {
             <>
               <DemoPlanetBackdrop />
               <Physics gravity={[0, 0, 0]}>
+                <DemoValidationClock validation={validationScenario} />
                 <TerrainArena />
                 <TerrainChunkManager positionRef={playerPositionRef} />
                 <DemoBoxmanPlayer
@@ -188,6 +190,7 @@ function DemoScene() {
                 stepRequest={physicsDebug.stepRequest}
                 timeScale={physicsDebug.timeScale}
               />
+              <DemoValidationClock validation={validationScenario} />
               <FlatArena />
               {DEMO_PLAYER_MODE === "ragdoll" ? (
               <CharacterCtrlrActiveRagdollPlayer
