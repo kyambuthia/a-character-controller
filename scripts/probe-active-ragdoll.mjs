@@ -10,13 +10,13 @@
 //   node scripts/probe-active-ragdoll.mjs [--scenario spawn_idle_stability]
 //       [--duration 8] [--interval 0.15] [--port 5199] [--player ragdoll]
 //       [--shove x,y,z] [--shoveAt 4] [--dumpAt 5] [--trace 1.8,3.2] [--traceStride 6]
-//       [--query key=value&key2=value2] [--window 480,300]
+//       [--query key=value&key2=value2] [--window 480,300] [--shots 4,4.5 --shotDir dir]
 //
 // --duration, --shoveAt and the t column are simulated seconds, not wall-clock seconds.
 // Exit code 0 means the probe ran (regardless of pass/fail verdict).
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +41,9 @@ const SHOVE_AT_SECONDS = Number(ARGS.shoveAt ?? 4);
 const TRACE_WINDOW = ARGS.trace ? String(ARGS.trace).split(",").map(Number) : null;
 // With --traceJoints, trace rows also print measured and target leg joint angles.
 const TRACE_JOINTS = Boolean(ARGS.traceJoints);
+// Optional: --shots 4,4.3,4.6 --shotDir dir saves PNG screenshots at those simulated times.
+const SHOT_TIMES = ARGS.shots ? String(ARGS.shots).split(",").map(Number) : [];
+const SHOT_DIR = ARGS.shotDir ?? ".";
 // Physics steps between printed rows of the shove trace.
 const TRACE_STRIDE = Number(ARGS.traceStride ?? 6);
 const DUMP_AT_SECONDS = ARGS.dumpAt != null ? Number(ARGS.dumpAt) : null;
@@ -308,6 +311,13 @@ async function main() {
             __probeRootY: rootY,
           };
           samples.push(annotated);
+          if (SHOT_TIMES.length > 0 && simulatedSeconds >= SHOT_TIMES[0]) {
+            SHOT_TIMES.shift();
+            const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+            const file = join(SHOT_DIR, `probe-${SCENARIO}-${simulatedSeconds.toFixed(2)}s.png`);
+            writeFileSync(file, Buffer.from(shot.data, "base64"));
+            console.log(`-- screenshot ${file} --`);
+          }
           if (DUMP_AT_SECONDS != null && !dumped && simulatedSeconds >= DUMP_AT_SECONDS) {
             dumped = true;
             console.log(`-- debug state at t=${simulatedSeconds.toFixed(2)}s --`);
@@ -393,9 +403,13 @@ async function main() {
           expression: "JSON.stringify(window.__characterCtrlrActiveRagdollTrace ?? [])",
           returnByValue: true,
         });
-        const moving = JSON.parse(traceResult.result?.value ?? "[]").filter(
-          (e) => e.pelvis && e.phase && e.phase !== "idle",
-        );
+        // Commanded locomotion runs from the first to the last stepping phase; this skips the
+        // spawn drop (airborne) and the idle stand afterwards.
+        const traced = JSON.parse(traceResult.result?.value ?? "[]").filter((e) => e.pelvis && e.phase);
+        const isStepping = (e) => e.phase === "double-support" || e.phase.endsWith("stance");
+        const firstStep = traced.findIndex(isStepping);
+        const lastStep = traced.findLastIndex(isStepping);
+        const moving = firstStep >= 0 ? traced.slice(firstStep, lastStep + 1) : [];
         if (moving.length > 1) {
           const first = moving[0];
           const last = moving[moving.length - 1];
