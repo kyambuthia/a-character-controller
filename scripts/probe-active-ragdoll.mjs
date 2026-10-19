@@ -387,6 +387,36 @@ async function main() {
         }
       }
 
+      // Gait summary from the per-step trace (every physics step, so nothing is missed).
+      {
+        const traceResult = await cdp.send("Runtime.evaluate", {
+          expression: "JSON.stringify(window.__characterCtrlrActiveRagdollTrace ?? [])",
+          returnByValue: true,
+        });
+        const moving = JSON.parse(traceResult.result?.value ?? "[]").filter(
+          (e) => e.pelvis && e.phase && e.phase !== "idle",
+        );
+        if (moving.length > 1) {
+          const first = moving[0];
+          const last = moving[moving.length - 1];
+          const seconds = last.t - first.t;
+          const distance = Math.hypot(last.pelvis[0] - first.pelvis[0], last.pelvis[2] - first.pelvis[2]);
+          const restY = 0.08;
+          const clearance = Math.max(...moving.map((e) => Math.max(e.footL[1], e.footR[1]) - restY));
+          const single = moving.filter((e) => e.support === "left" || e.support === "right").length;
+          const airborne = moving.filter((e) => !e.grounded).length;
+          const minPelvisY = Math.min(...moving.map((e) => e.pelvis[1]));
+          let stances = 0;
+          for (let i = 1; i < moving.length; i += 1) {
+            if (moving[i].phase !== moving[i - 1].phase && moving[i].phase.endsWith("stance")) stances += 1;
+          }
+          console.log("\n--- GAIT (while commanded) ---");
+          console.log(`distance: ${distance.toFixed(2)}m in ${seconds.toFixed(1)}s (${(distance / Math.max(seconds, 1e-6)).toFixed(2)} m/s)`);
+          console.log(`stance phases: ${stances}, max foot clearance: ${(clearance * 100).toFixed(1)}cm`);
+          console.log(`single support: ${((single / moving.length) * 100).toFixed(0)}%, airborne: ${((airborne / moving.length) * 100).toFixed(0)}%, min pelvis y: ${minPelvisY.toFixed(2)}m`);
+        }
+      }
+
       // Verdict.
       if (samples.length === 0) {
         console.log("\nVERDICT: no debug samples captured");
