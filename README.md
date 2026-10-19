@@ -4,17 +4,32 @@
 
 ## WIP
 
-The active ragdoll now **stands**. Walking, turning, running and recovery stepping are still unsolved.
+The active ragdoll **stands and walks** in the demo, but slowly, and only on a rotation-locked rig. Turning, fast running and recovery stepping are still unsolved.
 
-Standing holds indefinitely and absorbs pushes of at least 1.5 m/s in any direction and a 3 m/s hop (measured with `scripts/probe-active-ragdoll.mjs`, see below). The fix was in the motor layer, not the gait logic: Rapier's default acceleration-based joint motors cannot hold weight through light limbs, so joints now use force-based torque motors (`MOTOR_TORQUE_SCALE` in `active-ragdoll/motors.ts`), and the controller runs on the fixed physics step instead of the render loop.
+Measured in the browser with `scripts/probe-active-ragdoll.mjs` (see below):
 
-An important caveat: the rig's torso and legs are rotation-locked (pelvis/chest yaw only, legs pitch only), so it cannot tip over. That makes this a sagittal stand, not full 3D balance. Unlocking those axes is the next hard step before real walking.
+| Scenario | Result |
+| --- | --- |
+| `spawn_idle_stability` | stands indefinitely; absorbs a 1.5 m/s whole-body push and settles |
+| `steady_forward_walk` | 0.57 m/s, ~25 cm foot clearance, no falls; stops and stands when the key is released |
+| `steady_forward_run` | 0.77 m/s, no falls (not yet a real run) |
+| `steady_crouch_walk` | 0.15 m/s at a 1.42 m crouch, no falls |
+| `turn_in_place_stability` | no falls, but reports `unstable_yaw` while turning |
+
+What got it there, in order:
+
+- **Motors.** Rapier's default acceleration-based joint motors cannot hold weight through light limbs, so joints use force-based torque motors (`MOTOR_TORQUE_SCALE` in `active-ragdoll/motors.ts`), and the controller runs on the fixed physics step instead of the render loop.
+- **Masses.** `@react-three/rapier` ignores a `RigidBody`'s `mass` prop when it builds auto-colliders, so the browser ragdoll weighed ~0.9 kg while the headless tests simulated ~14 kg. Bodies now get a density derived from their mass (`deriveCharacterCtrlrHumanoidBodyDensity`). The light rig made the solver blow up as soon as a foot lifted.
+- **Foot contacts.** The collision handler rejected every foot-ground contact (wrong normal sign), so grounding relied on one ray from each foot's centre. It now measures the contact with the foot first (`measureContactSupport`).
+- **Gait.** A stance phase ended as a "landing" before the swing foot had lifted; gait pelvis heights were tuned for an older, shorter rig; and the swing leg was too weak and too slow (overdamped) and bent too little to clear the ground.
+
+Caveat: the rig's torso and legs are rotation-locked (pelvis/chest yaw only, legs pitch only), so it cannot tip over sideways or shift its weight onto one foot. This is sagittal walking, not full 3D balance. Unlocking those axes is the next hard step.
 
 Active ragdoll WIP:
 
 ![Active ragdoll WIP](./docs/media/active-ragdoll-wip.png)
 
-Current walk attempt:
+Older walk attempt (captured before the fixes above):
 
 ![Active ragdoll walk attempt](./docs/media/active-ragdoll-walk-attempt.gif)
 
@@ -65,25 +80,25 @@ What is not finished yet:
 
 ## Current issues
 
-Standing is solved (see WIP above). Still open:
+Standing and slow walking work (see WIP above). Still open:
 
-- first-step and continuous walking are not dependable, especially where balance recovery, support switching and leg drive interact
-- turning and prolonged running can still destabilize the torso and push the controller into stumble/fall recovery
-- the scripted walking validation scenarios are not passing yet
+- walking is slow (0.57 m/s against a 2.7 m/s command) and running is barely faster than walking
+- turning in place reports `unstable_yaw`; turning while walking has not been tuned
 - the rig is rotation-locked, so lateral balance and torso tilt are not actually being controlled
-- standing still leans on world-space impulse assists (pelvis height/centring, foot planting) on top of the joint motors; they should be dialled down once the motors alone are trusted
+- locomotion still leans on world-space impulse assists (pelvis height/centring, foot planting, swing-foot placement) on top of the joint motors
 - the Mixamo-driven target path is useful for motion reference, but it does not yet guarantee stable physical walking
 - the capsule controller remains the more reliable baseline; the active ragdoll is the current research path
 
-How standing was verified:
+How it is measured:
 
-- `scripts/sim-standing.mts` runs the humanoid headlessly on plain Rapier (no browser) and prints pelvis height, tilt and joint angles; `--force` switches to force-based motors, `--pushz`/`--pushx` shove the pelvis
-- `src/lib/components/active-ragdoll/standing.sim.test.ts` holds a 12 s stand, checks pushes in three directions, and documents that the default motor model buckles
-- `node scripts/probe-active-ragdoll.mjs --scenario spawn_idle_stability --shove 0,0,1.5` runs the real React player in headless Chrome, applies a whole-body push (m/s) through a debug-only hook, and prints a fixed-step trace of the response
+- `node scripts/probe-active-ragdoll.mjs --scenario <name>` runs the real React player in headless Chrome and prints sampled controller state, a gait summary (distance, speed, foot clearance, support) and a verdict. Scenario input and `--duration` run on simulated time, so a slow software renderer cannot distort them. Useful options: `--shove x,y,z` (whole-body push in m/s) with `--shoveAt t`, `--trace from,to` with `--traceStride n` and `--traceJoints 1` (per-physics-step trace), `--dumpAt t` (full debug state), `--shots t1,t2 --shotDir dir` (screenshots), `--query skin=boxes` (extra URL parameters)
+- scenarios: `spawn_idle_stability`, `mild_push_recovery`, `turn_in_place_stability`, `walk_start_from_rest`, `steady_forward_walk`, `steady_forward_run`, `steady_crouch_walk`, `walk_run_walk_transition`, `no_persistent_foot_chatter`, `no_persistent_leg_scissoring`
+- `scripts/sim-standing.mts` runs the humanoid headlessly on plain Rapier (no browser); `--force` switches to force-based motors, `--pushz`/`--pushx` shove the pelvis
+- headless Rapier tests: `standing.sim.test.ts` (12 s stand, pushes, default motors buckle), `swing.sim.test.ts` (the swing gains lift a foot), `contactTracking.test.ts` (foot contact direction), `CharacterCtrlrHumanoidData.test.ts` (every body gets its defined mass)
 
 Important engineering note:
 
-- high COM plus small feet creates inverted-pendulum instability in any engine, but the standing collapse was not that: it was the motor model
+- high COM plus small feet creates inverted-pendulum instability in any engine, but the standing and walking failures so far were not that: they were the motor model, the body masses, the contact sign and the gait timing
 - the gait FSM, balance strategy, support switching, and step-placement logic are the primary controller-side responsibilities still under active work
 
 ## Install
