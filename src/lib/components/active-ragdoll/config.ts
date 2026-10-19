@@ -52,6 +52,9 @@ export const NEUTRAL_ARTICULATED_POSE: RevoluteJointPoseMap = {
   ankleRight: STAND_ANKLE_TARGET,
 };
 
+// Gait pelvis heights are offsets from the standing height so they follow the rig's leg length.
+// They were absolute numbers tuned for a 1.76 m stand and were left behind when the rig grew, which
+// made walking pull the pelvis 0.6 m down into the legs.
 export const GAIT_CONFIGS: Record<
   "idle" | "walk" | "run" | "crouch",
   CharacterCtrlrGaitConfig
@@ -70,7 +73,7 @@ export const GAIT_CONFIGS: Record<
       width: [0.2, 0.2],
       height: [0.02, 0.02],
       pelvisLeadScale: [0, 0],
-      pelvisHeight: [1.72, 1.72],
+      pelvisHeight: [STAND_PELVIS_HEIGHT, STAND_PELVIS_HEIGHT],
     },
     support: {
       centering: { double: 3.2, single: 5.4 },
@@ -128,7 +131,7 @@ export const GAIT_CONFIGS: Record<
       width: [0.2, 0.24],
       height: [0.08, 0.2],
       pelvisLeadScale: [0.32, 0.44],
-      pelvisHeight: [1.34, 1.08],
+      pelvisHeight: [STAND_PELVIS_HEIGHT - 0.06, STAND_PELVIS_HEIGHT - 0.12],
     },
     support: {
       centering: { double: 3.2, single: 5.4 },
@@ -186,7 +189,7 @@ export const GAIT_CONFIGS: Record<
       width: [0.16, 0.18],
       height: [0.12, 0.26],
       pelvisLeadScale: [0.38, 0.52],
-      pelvisHeight: [1.32, 1.06],
+      pelvisHeight: [STAND_PELVIS_HEIGHT - 0.08, STAND_PELVIS_HEIGHT - 0.16],
     },
     support: {
       centering: { double: 3.5, single: 5.8 },
@@ -244,7 +247,7 @@ export const GAIT_CONFIGS: Record<
       width: [0.24, 0.28],
       height: [0.06, 0.14],
       pelvisLeadScale: [0.24, 0.34],
-      pelvisHeight: [1.16, 1.02],
+      pelvisHeight: [STAND_PELVIS_HEIGHT - 0.42, STAND_PELVIS_HEIGHT - 0.56],
     },
     support: {
       centering: { double: 3.6, single: 5.9 },

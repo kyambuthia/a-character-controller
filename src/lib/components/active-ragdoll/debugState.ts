@@ -1,7 +1,7 @@
 import type { CharacterCtrlrLocomotionDebugState } from "../../types";
 import { REVOLUTE_JOINT_LIMITS } from "./config";
 
-function deriveWarnings(params: {
+export function deriveWarnings(params: {
   groundedAfterControl: boolean;
   supportState: CharacterCtrlrLocomotionDebugState["supportState"];
   supportHeightError: number;
@@ -21,8 +21,12 @@ function deriveWarnings(params: {
     warnings.push("lost_support");
   }
 
-  if (supportHeightError < -0.18) {
+  // supportHeightError is target minus measured pelvis height: positive means the pelvis sags
+  // below its target, negative means it rides above it.
+  if (supportHeightError > 0.18) {
     warnings.push("pelvis_too_low");
+  } else if (supportHeightError < -0.18) {
+    warnings.push("pelvis_too_high");
   }
 
   if (Math.abs(yawError) > 0.48) {
