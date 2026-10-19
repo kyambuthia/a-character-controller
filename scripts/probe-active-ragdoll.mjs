@@ -10,7 +10,7 @@
 //   node scripts/probe-active-ragdoll.mjs [--scenario spawn_idle_stability]
 //       [--duration 8] [--interval 0.15] [--port 5199] [--player ragdoll]
 //       [--shove x,y,z] [--shoveAt 4] [--dumpAt 5] [--trace 1.8,3.2] [--traceStride 6]
-//       [--query key=value&key2=value2]
+//       [--query key=value&key2=value2] [--window 480,300]
 //
 // --duration, --shoveAt and the t column are simulated seconds, not wall-clock seconds.
 // Exit code 0 means the probe ran (regardless of pass/fail verdict).
@@ -58,7 +58,9 @@ const BASE_FLAGS = [
   "--disable-extensions",
   "--no-first-run",
   "--no-default-browser-check",
-  "--window-size=1280,800",
+  // A small window keeps software rendering cheap: at 1280x800 the physics ran at ~25% of real
+  // time, at 480x300 it keeps up. Override with --window w,h.
+  `--window-size=${ARGS.window ?? "480,300"}`,
 ];
 
 function sleep(ms) {
