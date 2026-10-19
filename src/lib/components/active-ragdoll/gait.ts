@@ -88,6 +88,7 @@ export function transitionGaitState(
     gaitState.phaseElapsed = 0;
     gaitState.transitionReason = reason;
     gaitState.transitionCount += 1;
+    gaitState.swingLiftedOff = false;
   }
 
   gaitState.phaseDuration = nextDuration;
@@ -120,6 +121,7 @@ export function createInitialGaitState(): GaitState {
     transitionReason: "initial",
     transitionCount: 0,
     lastStanceSide: "right",
+    swingLiftedOff: false,
   };
 }
 
@@ -165,7 +167,15 @@ export function advanceGaitState(params: {
     gaitConfig,
     jumpTriggered,
   } = params;
-  const canTransition = gaitState.phaseElapsed >= MIN_GAIT_PHASE_HOLD;
+  const inStance = gaitState.phase === "left-stance" || gaitState.phase === "right-stance";
+  if (inStance && supportStateForPhase !== "double") {
+    gaitState.swingLiftedOff = true;
+  }
+  // A stance phase only ends on touchdown after the swing foot has actually left the ground. While
+  // it is still planted the support reads "double", which used to end every stance as a landing
+  // after MIN_GAIT_PHASE_HOLD, before the swing leg could lift: the character marched in place.
+  const canTransition =
+    gaitState.phaseElapsed >= MIN_GAIT_PHASE_HOLD && gaitState.swingLiftedOff;
   let reason: CharacterCtrlrGaitTransitionReason | null = null;
   let nextPhase: CharacterCtrlrGaitPhase | null = null;
 

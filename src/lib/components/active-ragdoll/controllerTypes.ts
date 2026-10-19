@@ -98,6 +98,8 @@ export type GaitState = {
   transitionReason: CharacterCtrlrGaitTransitionReason;
   transitionCount: number;
   lastStanceSide: SupportSide;
+  /** True once the swing foot has left the ground during the current stance phase. */
+  swingLiftedOff: boolean;
 };
 
 export type RecoveryState = {
