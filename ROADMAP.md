@@ -1,6 +1,6 @@
 # Production Active-Ragdoll Roadmap
 
-This roadmap is for the publishable library in `src/lib`, not for demo-only scaffolding. The demo exists to inspect runtime behavior over LAN and in-browser, but the shipping work belongs in the library codepath.
+This roadmap is for the publishable library in src/lib. Its browser playground lives in the separate [planet-walker](https://github.com/kyambuthia/planet-walker) repository; shipping controller behavior belongs in this library.
 
 The chosen controller family is documented in [RESEARCH.md](./RESEARCH.md): a `SIMBICON`-style finite-state controller with `capture-point` stepping heuristics and later directional extensions inspired by `Generalized Biped Walking Control`.
 

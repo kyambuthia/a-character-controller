@@ -1,7 +1,7 @@
 {
   "name": "a-character-controller",
   "version": "0.1.0",
-  "description": "A React Three Fiber third-person controller library with a primitive player, follow camera, and ragdoll debugging sandbox.",
+  "description": "Reusable third-person character controller components for React Three Fiber.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -41,16 +41,12 @@
     "dist"
   ],
   "scripts": {
-    "dev": "vite",
-    "dev:lan": "vite --host 0.0.0.0 --port 4173",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build:lib": "tsup src/lib/index.ts --clean --format esm,cjs --dts --external react,react-dom,three,@react-three/fiber,@react-three/rapier,@react-three/drei,zustand",
-    "build:demo": "vite build",
-    "build": "npm run typecheck && npm run test && npm run build:lib && npm run build:demo",
+    "build": "npm run typecheck && npm run test && npm run build:lib",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build:lib",
-    "preview": "vite preview",
-    "preview:lan": "vite preview --host 0.0.0.0 --port 4173"
+    "prepare": "npm run build:lib"
   },
   "dependencies": {
     "zustand": "^5.0.8"
@@ -69,13 +65,11 @@
     "@react-three/rapier": "^2.1.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@vitejs/plugin-react": "^5.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "three": "^0.181.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.12",
     "vitest": "^3.2.4"
   }
 }

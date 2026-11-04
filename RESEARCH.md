@@ -177,7 +177,7 @@ This is intentionally conservative. It is the highest-confidence path to a contr
 Because we are following this literature as a shipping plan instead of a toy experiment:
 
 - all control architecture changes belong in `src/lib`
-- `src/components` may visualize the work, but they must not become the primary implementation site
+- The separate planet-walker playground may visualize the work, but it must not become the primary implementation site
 - observability is part of the architecture, not an afterthought
 - every locomotion phase should surface measurable diagnostics: support state, COM projection, capture point, planned footfall, joint error, and transition reason
 
